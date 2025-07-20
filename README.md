@@ -28,3 +28,12 @@ An interactive web application for building, visualizing, and analyzing decision
    ```bash
    git clone https://github.com/sandeepkhadk/Decision_Tree_Generator.git
    cd Decision_Tree_Generator
+   
+2. **Set up a virtual environment**:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+3. **Install dependencies:**
+    ```bash
+   pip install -r requirements.txt
