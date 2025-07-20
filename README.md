@@ -41,5 +41,6 @@ An interactive web application for building, visualizing, and analyzing decision
 **Running the Application**
   Start the Streamlit app:
   ```bash
-  streamlit run main.py
-  The application will open in your default browser at http://localhost:8501.
+   streamlit run main.
+
+ 
