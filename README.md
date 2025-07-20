@@ -41,9 +41,15 @@ An interactive web application for building, visualizing, and analyzing decision
 ### Running the Application
    ***Start the Streamlit app:***
    
-      streamlit run main.py
-   
-      
+        streamlit run main.py
+### Project Structure
+      decision_tree_app/
+      ├── main.py                 # Main application entry point
+      ├── preprocessing.py        # Data preprocessing functions
+      ├── visualization.py        # Visualization utilities
+      ├── model.py                # Model building and evaluation
+      ├── config.py               # Configuration constants
+
 
 
 
