@@ -21,7 +21,6 @@ An interactive web application for building, visualizing, and analyzing decision
 
 - Python 3.8+
 - pip package manager
-- (Optional) Docker for containerized deployment
 
 ### Installation
 
