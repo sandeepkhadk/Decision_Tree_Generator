@@ -50,7 +50,15 @@ An interactive web application for building, visualizing, and analyzing decision
       ├── model.py                # Model building and evaluation
       ├── config.py               # Configuration constants
 
-
+### Usage Guide
+   1. Upload your dataset (CSV or Excel format).
+   2. Select the target variable you want to predict.
+   3. Explore your data using interactive visualizations.
+   4. Select features to include in the model.
+   5. Adjust tree parameters in the sidebar.
+   6. View model performance metrics.
+   7. Visualize the decision tree and feature importance.
+   8. Export results as needed.
 
 
 
