@@ -37,3 +37,9 @@ An interactive web application for building, visualizing, and analyzing decision
 3. **Install dependencies:**
     ```bash
    pip install -r requirements.txt
+
+**Running the Application**
+  Start the Streamlit app:
+  ```bash
+  streamlit run main.py
+  The application will open in your default browser at http://localhost:8501.
