@@ -38,9 +38,11 @@ An interactive web application for building, visualizing, and analyzing decision
     ```bash
    pip install -r requirements.txt
 
-**Running the Application**
-  Start the Streamlit app:
-  ```bash
-   streamlit run main.
+## Running the Application
+  **Start the Streamlit app:**
+   ```bash
+     streamlit run main.
+
+
 
  
