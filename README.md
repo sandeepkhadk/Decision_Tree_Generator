@@ -5,7 +5,6 @@
 
 An interactive web application for building, visualizing, and analyzing decision trees from uploaded datasets.
 
-![App Screenshot](docs/screenshot.png)
 
 ## Features
 
