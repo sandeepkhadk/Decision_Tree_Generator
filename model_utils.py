@@ -25,12 +25,16 @@ from sklearn.ensemble import (
     ExtraTreesRegressor,
     GradientBoostingClassifier,
     GradientBoostingRegressor,
-    HistGradientBoostingClassifier,
-    HistGradientBoostingRegressor,
     RandomForestClassifier,
     RandomForestRegressor,
 )
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
+
+try:
+    from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
+except ImportError:  # pragma: no cover - only hit on very old scikit-learn
+    HistGradientBoostingClassifier = None
+    HistGradientBoostingRegressor = None
 
 
 MODEL_CATALOG: list[dict[str, str]] = [
@@ -178,6 +182,10 @@ def create_model(model_name: str, problem_type: str, params: dict[str, Any]):
         return GradientBoostingRegressor(**params)
 
     if model_name == "hist_gradient_boosting":
+        if HistGradientBoostingClassifier is None:
+            raise ImportError(
+                "HistGradientBoosting requires a newer scikit-learn version. Please upgrade scikit-learn."
+            )
         if problem_type == "classification":
             return HistGradientBoostingClassifier(**params)
         return HistGradientBoostingRegressor(**params)
