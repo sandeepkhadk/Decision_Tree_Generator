@@ -1,9 +1,11 @@
 #  🌳 Decision Tree Generator
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://your-app-url.streamlit.app/)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://decisiontreegenerator.streamlit.app/)
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
 
 An interactive web application for building, visualizing, and analyzing decision trees from uploaded datasets.
+
+Live demo: https://decisiontreegenerator.streamlit.app/
 
 
 ## Features
