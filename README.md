@@ -1,11 +1,11 @@
-#  🌳 ML Tree Studio (Decision Tree Generator)
+#  🌳 ML Trees Generator
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://decisiontreegenerator.streamlit.app/)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://mltreestudio.streamlit.app/)
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
 
 An interactive dashboard-style web application for building, configuring, and visualizing tree-based machine learning models — decision trees, random forests, extra trees, gradient boosting, hist gradient boosting, AdaBoost, XGBoost, LightGBM, and CatBoost — from uploaded datasets.
 
-Live demo: https://decisiontreegenerator.streamlit.app/
+Live demo: https://mltreestudio.streamlit.app/
 
 
 ## Features
@@ -43,7 +43,7 @@ Live demo: https://decisiontreegenerator.streamlit.app/
     ```bash
    pip install -r requirements.txt
 
-# Decision Tree Generator
+# ML Trees Generator
 
 [![Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://streamlit.io/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
