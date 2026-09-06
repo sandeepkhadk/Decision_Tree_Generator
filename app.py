@@ -39,7 +39,7 @@ from model_utils import (
     evaluate_predictions,
 )
 from preprocessing import create_preprocessor, detect_column_types, get_feature_names
-from tree_utils import figure_to_png_bytes, get_tree_depth, plot_tree_figure
+from tree_utils import figure_to_png_bytes, figure_to_svg_data_uri, get_tree_depth, plot_tree_figure
 
 
 logging.basicConfig(level=logging.INFO)
@@ -700,12 +700,19 @@ def main() -> None:
                 if hasattr(artifacts.pipeline.named_steps["model"], "estimators_"):
                     st.caption("The visualization shows the first tree in the ensemble.")
                 image_bytes = None
+                svg_data_uri = None
                 try:
                     image_bytes = figure_to_png_bytes(fig)
+                    svg_data_uri = figure_to_svg_data_uri(fig)
                 except Exception:
                     image_bytes = None
 
-                if image_bytes is not None:
+                if svg_data_uri is not None:
+                    st.markdown(
+                        f'<img src="{svg_data_uri}" style="width:100%;height:auto;display:block;" />',
+                        unsafe_allow_html=True,
+                    )
+                elif image_bytes is not None:
                     st.image(image_bytes, use_container_width=True)
                 else:
                     st.pyplot(fig, clear_figure=False)

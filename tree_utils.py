@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from io import BytesIO
 from typing import Any
 
@@ -62,6 +63,15 @@ def figure_to_png_bytes(figure) -> bytes:
     figure.savefig(buffer, format="png", bbox_inches="tight", dpi=300)
     buffer.seek(0)
     return buffer.getvalue()
+
+
+def figure_to_svg_data_uri(figure) -> str:
+    """Convert a matplotlib figure to an SVG data URI for crisp browser display."""
+    buffer = BytesIO()
+    figure.savefig(buffer, format="svg", bbox_inches="tight")
+    svg_text = buffer.getvalue().decode("utf-8")
+    encoded_svg = base64.b64encode(svg_text.encode("utf-8")).decode("ascii")
+    return f"data:image/svg+xml;base64,{encoded_svg}"
 
 
 def get_tree_depth(model) -> int:
