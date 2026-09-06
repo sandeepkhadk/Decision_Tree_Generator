@@ -705,7 +705,10 @@ def main() -> None:
                 except Exception:
                     image_bytes = None
 
-                st.pyplot(fig, clear_figure=False)
+                if image_bytes is not None:
+                    st.image(image_bytes, use_container_width=True)
+                else:
+                    st.pyplot(fig, clear_figure=False)
 
                 if image_bytes is not None:
                     st.download_button(

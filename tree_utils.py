@@ -34,7 +34,7 @@ def plot_tree_figure(model, feature_names: list[str], class_names: list[str] | N
     figure_width = max(18, min(34, 0.45 * max(1, len(feature_names))))
     depth_for_layout = tree_depth if max_depth is None else min(tree_depth, max_depth)
     figure_height = max(10, min(24, 2.5 + 0.8 * max(1, depth_for_layout)))
-    figure, axis = plt.subplots(figsize=(figure_width, figure_height), dpi=180)
+    figure, axis = plt.subplots(figsize=(figure_width, figure_height), dpi=260)
 
     fontsize = max(7, min(12, 12 - max(0, len(feature_names) // 10)))
 
@@ -59,7 +59,7 @@ def plot_tree_figure(model, feature_names: list[str], class_names: list[str] | N
 def figure_to_png_bytes(figure) -> bytes:
     """Convert a matplotlib figure to PNG bytes for download."""
     buffer = BytesIO()
-    figure.savefig(buffer, format="png", bbox_inches="tight", dpi=240)
+    figure.savefig(buffer, format="png", bbox_inches="tight", dpi=300)
     buffer.seek(0)
     return buffer.getvalue()
 
