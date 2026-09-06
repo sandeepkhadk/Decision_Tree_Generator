@@ -1,20 +1,22 @@
-#  🌳 Decision Tree Generator
+#  🌳 ML Tree Studio (Decision Tree Generator)
 
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://decisiontreegenerator.streamlit.app/)
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
 
-An interactive web application for building, visualizing, and analyzing decision trees, random forests, extra trees, gradient boosting, hist gradient boosting, AdaBoost, XGBoost, LightGBM, and CatBoost from uploaded datasets.
+An interactive dashboard-style web application for building, configuring, and visualizing tree-based machine learning models — decision trees, random forests, extra trees, gradient boosting, hist gradient boosting, AdaBoost, XGBoost, LightGBM, and CatBoost — from uploaded datasets.
 
 Live demo: https://decisiontreegenerator.streamlit.app/
 
 
 ## Features
 
--  📊 Upload CSV/Excel datasets
+-  🏠 Dashboard home page with quick actions and model cards
+-  🧭 Sidebar navigation across all supported models and the dataset page
+-  📊 Upload CSV/Excel datasets with a drag-and-drop interface
 -  🔍 Interactive data exploration
--  🌳 Customizable decision tree parameters
--  🌲 Multiple tree-based model support
+-  🌲 Multiple tree-based model support, each with its own configuration and description
 -  📈 Feature importance visualization
+-  🌳 Interactive tree viewer with zoom, pan, fit-to-view, and fullscreen controls
 -  🎯 Automatic problem type detection (classification/regression)
 -  💾 Export decision trees and feature importance
 

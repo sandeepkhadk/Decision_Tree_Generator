@@ -6,6 +6,7 @@ from typing import Any
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
+import streamlit.components.v1 as components
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import (
@@ -31,15 +32,25 @@ from data_utils import (
     validate_file_size,
 )
 from model_utils import (
+    MODEL_CATALOG,
     ModelArtifacts,
     decode_predictions,
     encode_classification_target,
     create_model,
     determine_problem_type,
     evaluate_predictions,
+    get_estimator_count,
+    get_model_meta,
 )
 from preprocessing import create_preprocessor, detect_column_types, get_feature_names
-from tree_utils import figure_to_png_bytes, figure_to_svg_data_uri, get_tree_depth, plot_tree_figure
+from tree_utils import (
+    build_tree_viewer_html,
+    figure_to_png_bytes,
+    figure_to_svg_markup,
+    get_tree_depth,
+    get_tree_estimator_count,
+    plot_tree_figure,
+)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -48,25 +59,70 @@ LOGGER = logging.getLogger(__name__)
 
 st.set_page_config(page_title=APP_NAME, page_icon="🌳", layout="wide")
 
+MODEL_KEYS = [entry["name"] for entry in MODEL_CATALOG]
+
 
 CSS = """
 <style>
     .main { background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%); }
     .block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
+
     .hero-card {
         background: white;
         border: 1px solid rgba(15, 23, 42, 0.08);
         border-radius: 20px;
         padding: 1.5rem;
         box-shadow: 0 20px 50px rgba(15, 23, 42, 0.06);
+        margin-bottom: 1rem;
     }
+
+    .brand-block { padding: 0.2rem 0 1rem; }
+    .brand-title { font-size: 1.2rem; font-weight: 700; color: #0f172a; line-height: 1.25; }
+    .brand-tagline { font-size: 0.8rem; color: #64748b; margin-top: 0.25rem; }
+
+    .nav-section-label {
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        color: #94a3b8;
+        text-transform: uppercase;
+        margin: 0.9rem 0 0.35rem 0.1rem;
+    }
+
+    section[data-testid="stSidebar"] button {
+        transition: background-color 0.15s ease, transform 0.1s ease;
+        justify-content: flex-start;
+    }
+    section[data-testid="stSidebar"] button:hover { transform: translateX(1px); }
+
     .metric-card {
         background: white;
         border-radius: 16px;
         padding: 1rem 1.1rem;
         border: 1px solid rgba(15, 23, 42, 0.08);
         box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
+        transition: box-shadow 0.15s ease;
     }
+    .metric-card:hover { box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08); }
+    .metric-card-label { font-size: 0.78rem; color: #64748b; font-weight: 600; }
+    .metric-card-value { font-size: 1.3rem; color: #0f172a; font-weight: 700; margin-top: 0.2rem; word-break: break-word; }
+
+    .model-card { padding: 0.2rem 0 0.6rem; }
+    .model-card-icon { font-size: 1.6rem; }
+    .model-card-title { font-size: 1.05rem; font-weight: 700; color: #0f172a; margin-top: 0.35rem; }
+    .model-card-desc { font-size: 0.85rem; color: #64748b; margin-top: 0.3rem; min-height: 2.6rem; }
+
+    .empty-state {
+        background: white;
+        border: 1px dashed rgba(100, 116, 139, 0.35);
+        border-radius: 16px;
+        padding: 2.2rem 1.5rem;
+        text-align: center;
+        margin: 0.5rem 0 1rem;
+    }
+    .empty-state-title { font-size: 1.05rem; font-weight: 700; color: #0f172a; }
+    .empty-state-message { font-size: 0.9rem; color: #64748b; margin-top: 0.4rem; }
+
     .status-success {
         background: #ecfdf5;
         color: #065f46;
@@ -80,6 +136,11 @@ CSS = """
         border: 1px solid #fecaca;
         border-radius: 12px;
         padding: 0.8rem 1rem;
+    }
+
+    button:focus-visible, a:focus-visible {
+        outline: 2px solid #2563eb !important;
+        outline-offset: 2px !important;
     }
 </style>
 """
@@ -101,22 +162,82 @@ def init_state() -> None:
         "train_metrics": None,
         "test_metrics": None,
         "prediction": None,
+        "nav_page": "dashboard",
+        "trained_model_name": None,
+        "last_train_meta": None,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
 
 
-def render_header() -> None:
-    st.markdown(CSS, unsafe_allow_html=True)
+def go_to(page: str) -> None:
+    st.session_state.nav_page = page
+
+
+def render_sidebar() -> None:
+    with st.sidebar:
+        st.markdown(
+            f"""
+            <div class="brand-block">
+                <div class="brand-title">{APP_NAME}</div>
+                <div class="brand-tagline">{APP_TAGLINE}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        def nav_button(label: str, page_key: str) -> None:
+            is_active = st.session_state.nav_page == page_key
+            st.button(
+                label,
+                key=f"nav_{page_key}",
+                use_container_width=True,
+                type="primary" if is_active else "secondary",
+                on_click=go_to,
+                args=(page_key,),
+            )
+
+        nav_button("🏠  Dashboard", "dashboard")
+
+        st.markdown('<div class="nav-section-label">Models</div>', unsafe_allow_html=True)
+        for entry in MODEL_CATALOG:
+            nav_button(f"{entry['icon']}  {entry['label']}", entry["name"])
+
+        st.markdown('<div class="nav-section-label">Data</div>', unsafe_allow_html=True)
+        nav_button("📊  Dataset", "dataset")
+
+        st.divider()
+        if st.session_state.dataset is not None:
+            st.caption(f"Active dataset: **{st.session_state.dataset_name}**")
+            st.caption(f"{st.session_state.summary['rows']:,} rows · {st.session_state.summary['columns']} columns")
+        else:
+            st.caption("No dataset uploaded yet.")
+
+
+def render_empty_state(
+    title: str,
+    message: str,
+    action_label: str | None = None,
+    action_page: str | None = None,
+) -> None:
     st.markdown(
         f"""
-        <div class="hero-card">
-            <h1 style="margin:0;font-size:2.2rem;">{APP_NAME}</h1>
-            <p style="margin:0.4rem 0 0;color:#475569;font-size:1.02rem;">{APP_TAGLINE}</p>
+        <div class="empty-state">
+            <div class="empty-state-title">{title}</div>
+            <div class="empty-state-message">{message}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    if action_label and action_page:
+        st.button(action_label, on_click=go_to, args=(action_page,), type="primary")
+
+
+def render_error(message: str, exc: Exception | None = None) -> None:
+    st.markdown(f'<div class="status-error">{message}</div>', unsafe_allow_html=True)
+    if exc is not None:
+        with st.expander("Technical details"):
+            st.code(str(exc))
 
 
 def render_dataset_overview(summary: dict[str, Any]) -> None:
@@ -148,6 +269,111 @@ def render_summary_tables(summary: dict[str, Any]) -> None:
             st.info("No numeric columns were detected for descriptive statistics.")
         else:
             st.dataframe(summary["numeric_summary"], use_container_width=True)
+
+
+def render_dataset_page() -> None:
+    st.markdown("## Dataset")
+    st.caption("Upload a CSV or Excel file to make it available to every model.")
+
+    with st.container(border=True):
+        uploaded_file = st.file_uploader(
+            "Drag and drop your dataset here, or click to browse",
+            type=["csv", "xlsx", "xls"],
+            key="dataset_uploader",
+        )
+        st.caption("Files are validated locally and never executed. Supported formats: CSV, XLS, XLSX.")
+
+    if uploaded_file is not None:
+        try:
+            validate_file_size(getattr(uploaded_file, "size", None))
+            file_bytes = uploaded_file.getvalue()
+            dataset_signature = file_hash(file_bytes)
+            if dataset_signature != st.session_state.dataset_signature:
+                dataset = cached_dataset(file_bytes, uploaded_file.name)
+                if dataset.empty:
+                    raise ValueError("The uploaded dataset is empty. Please provide a file with at least one row.")
+                st.session_state.dataset = dataset
+                st.session_state.dataset_name = uploaded_file.name
+                st.session_state.dataset_signature = dataset_signature
+                st.session_state.summary = summarize_dataset(dataset, uploaded_file.name)
+                st.session_state.artifacts = None
+                st.session_state.metrics = None
+                st.session_state.prediction = None
+                st.session_state.trained_model_name = None
+                st.session_state.last_train_meta = None
+        except Exception as exc:
+            LOGGER.exception("Dataset upload failed")
+            render_error("Unable to load this dataset.", exc)
+            return
+
+    dataset = st.session_state.dataset
+    if dataset is None:
+        render_empty_state(
+            "No dataset uploaded yet",
+            "Upload a CSV or Excel file above to explore it and start training models.",
+        )
+        return
+
+    summary = st.session_state.summary
+    st.markdown("### Dataset Overview")
+    render_dataset_overview(summary)
+    st.markdown("### Dataset Explorer")
+    render_summary_tables(summary)
+
+
+def render_dashboard() -> None:
+    st.markdown(
+        f"""
+        <div class="hero-card">
+            <h1 style="margin:0;font-size:2.1rem;">Welcome to {APP_NAME}</h1>
+            <p style="margin:0.5rem 0 0;color:#475569;font-size:1.05rem;">
+                Build and visualize machine learning models. Upload a dataset, configure an algorithm,
+                and explore trained trees and ensembles interactively.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.button("📊  Upload Dataset", use_container_width=True, on_click=go_to, args=("dataset",))
+    with col2:
+        default_model = st.session_state.trained_model_name or MODEL_CATALOG[0]["name"]
+        st.button(
+            "⚙️  Create Model",
+            use_container_width=True,
+            type="primary",
+            on_click=go_to,
+            args=(default_model,),
+        )
+
+    if st.session_state.dataset is not None:
+        st.markdown("### Current Dataset")
+        render_dataset_overview(st.session_state.summary)
+
+    st.markdown("### Available Models")
+    columns = st.columns(3)
+    for index, entry in enumerate(MODEL_CATALOG):
+        with columns[index % 3]:
+            with st.container(border=True):
+                st.markdown(
+                    f"""
+                    <div class="model-card">
+                        <div class="model-card-icon">{entry['icon']}</div>
+                        <div class="model-card-title">{entry['label']}</div>
+                        <div class="model-card-desc">{entry['description']}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                st.button(
+                    "Configure",
+                    key=f"card_{entry['name']}",
+                    use_container_width=True,
+                    on_click=go_to,
+                    args=(entry["name"],),
+                )
 
 
 def build_training_pipeline(
@@ -209,6 +435,7 @@ def render_feature_importance(model, feature_names: list[str]) -> None:
     axis.set_title("Top Features")
     figure.tight_layout()
     st.pyplot(figure, clear_figure=False)
+    plt.close(figure)
 
 
 def render_prediction_form(artifacts: ModelArtifacts, dataset: pd.DataFrame) -> None:
@@ -281,228 +508,380 @@ def render_confusion_matrix(metrics: dict[str, Any]) -> None:
     display.plot(ax=axis, cmap="Blues", colorbar=False)
     axis.set_title("Confusion Matrix")
     st.pyplot(figure, clear_figure=True)
+    plt.close(figure)
 
 
-def main() -> None:
-    init_state()
-    render_header()
+def render_model_info_cards(
+    artifacts: ModelArtifacts,
+    model_name: str,
+    tree_params: dict[str, Any],
+    n_samples: int,
+) -> None:
+    model_obj = artifacts.pipeline.named_steps["model"]
+    meta = get_model_meta(model_name)
+    estimator_count = get_estimator_count(model_obj)
+    max_depth_value = tree_params.get("max_depth")
+    if max_depth_value is None:
+        max_depth_value = get_tree_depth(model_obj) or None
 
-    with st.sidebar:
-        st.header("Controls")
-        uploaded_file = st.file_uploader("Upload CSV or Excel dataset", type=["csv", "xlsx", "xls"])
-        st.caption("Files are validated locally and never executed.")
-
-    if uploaded_file is not None:
-        try:
-            validate_file_size(getattr(uploaded_file, "size", None))
-            file_bytes = uploaded_file.getvalue()
-            dataset_signature = file_hash(file_bytes)
-            if dataset_signature != st.session_state.dataset_signature:
-                dataset = cached_dataset(file_bytes, uploaded_file.name)
-                if dataset.empty:
-                    raise ValueError("The uploaded dataset is empty. Please provide a file with at least one row.")
-                st.session_state.dataset = dataset
-                st.session_state.dataset_name = uploaded_file.name
-                st.session_state.dataset_signature = dataset_signature
-                st.session_state.summary = summarize_dataset(dataset, uploaded_file.name)
-                st.session_state.artifacts = None
-                st.session_state.metrics = None
-                st.session_state.prediction = None
-        except Exception as exc:
-            LOGGER.exception("Dataset upload failed")
-            st.error(str(exc))
-            return
-
-    dataset = st.session_state.dataset
-    if dataset is None:
-        st.info("Upload a dataset to begin.")
-        st.stop()
-
-    summary = st.session_state.summary
-    render_dataset_overview(summary)
-
-    st.markdown("### Dataset Explorer")
-    render_summary_tables(summary)
-
-    numeric_cols, categorical_cols, unsupported_cols = detect_supported_columns(dataset)
-    if unsupported_cols:
-        st.warning(f"Unsupported columns were detected and will be ignored automatically: {', '.join(unsupported_cols)}")
-
-    st.markdown("### Preprocessing and Model Setup")
-    target_col = st.selectbox("Target column", options=list(dataset.columns), index=len(dataset.columns) - 1)
-    feature_candidates = [column for column in dataset.columns if column != target_col and column not in unsupported_cols]
-    selected_features = st.multiselect(
-        "Feature columns",
-        options=feature_candidates,
-        default=feature_candidates,
-    )
-    if not selected_features:
-        st.warning("Select at least one feature column.")
-        st.stop()
-
-    train_size = 1 - st.slider("Test split", min_value=0.1, max_value=0.5, value=float(DEFAULT_TEST_SIZE), step=0.05)
-    random_state = st.number_input("Random state", value=int(DEFAULT_RANDOM_STATE), step=1)
-
-    problem_type = determine_problem_type(dataset[target_col])
-    model_options = [
-        ("Decision Tree", "decision_tree"),
-        ("Random Forest", "random_forest"),
-        ("Extra Trees", "extra_trees"),
-        ("Gradient Boosting", "gradient_boosting"),
-        ("HistGradientBoosting", "hist_gradient_boosting"),
-        ("AdaBoost", "adaboost"),
+    cards: list[tuple[str, str]] = [
+        ("Model Type", meta["label"]),
+        ("Problem Type", artifacts.problem_type.capitalize()),
     ]
-    model_label = st.selectbox("Model type", options=[label for label, _ in model_options])
-    model_name = dict(model_options)[model_label]
+    if estimator_count:
+        cards.append(("Estimators", f"{estimator_count:,}"))
+    if max_depth_value:
+        cards.append(("Max Depth", str(max_depth_value)))
+    cards.append(("Features", str(len(artifacts.feature_columns))))
+    cards.append(("Samples", f"{n_samples:,}"))
+    cards.append(("Status", "Trained"))
 
-    st.markdown("#### Tree Model Configuration")
+    st.markdown("### Model Information")
+    columns = st.columns(len(cards))
+    for column, (label, value) in zip(columns, cards):
+        with column:
+            st.markdown(
+                f"""<div class="metric-card"><div class="metric-card-label">{label}</div>
+                <div class="metric-card-value">{value}</div></div>""",
+                unsafe_allow_html=True,
+            )
+
+
+def render_model_config(model_name: str, problem_type: str, dataset: pd.DataFrame, target_col: str) -> dict[str, Any]:
+    """Render only the parameter widgets supported by the selected algorithm."""
+    values: dict[str, Any] = {
+        "criterion": None,
+        "max_depth": None,
+        "min_samples_split": None,
+        "min_samples_leaf": None,
+        "n_estimators": None,
+        "learning_rate": None,
+        "subsample": None,
+        "max_iter": None,
+        "max_leaf_nodes": None,
+        "l2_regularization": None,
+        "colsample_bytree": None,
+        "max_bin": None,
+        "num_leaves": None,
+        "class_weight": None,
+    }
+    key_prefix = model_name
+
     if model_name in {"decision_tree", "random_forest", "extra_trees"}:
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             criterion_options = ["squared_error", "friedman_mse", "absolute_error", "poisson"] if problem_type == "regression" else ["gini", "entropy", "log_loss"]
-            criterion = st.selectbox("Criterion", options=criterion_options)
+            values["criterion"] = st.selectbox("Criterion", options=criterion_options, key=f"criterion_{key_prefix}")
         with col2:
-            max_depth = st.number_input("Max depth", min_value=1, max_value=100, value=int(DEFAULT_MAX_DEPTH), step=1)
+            values["max_depth"] = st.number_input("Max depth", min_value=1, max_value=100, value=int(DEFAULT_MAX_DEPTH), step=1, key=f"maxdepth_{key_prefix}")
         with col3:
-            min_samples_split = st.number_input("Min samples split", min_value=2, max_value=100, value=int(DEFAULT_MIN_SAMPLES_SPLIT), step=1)
+            values["min_samples_split"] = st.number_input("Min samples split", min_value=2, max_value=100, value=int(DEFAULT_MIN_SAMPLES_SPLIT), step=1, key=f"minsplit_{key_prefix}")
         with col4:
-            min_samples_leaf = st.number_input("Min samples leaf", min_value=1, max_value=100, value=int(DEFAULT_MIN_SAMPLES_LEAF), step=1)
+            values["min_samples_leaf"] = st.number_input("Min samples leaf", min_value=1, max_value=100, value=int(DEFAULT_MIN_SAMPLES_LEAF), step=1, key=f"minleaf_{key_prefix}")
 
         if model_name in {"random_forest", "extra_trees"}:
-            n_estimators = st.number_input("Number of trees", min_value=10, max_value=500, value=100, step=10)
-        else:
-            n_estimators = None
-        learning_rate = None
-        subsample = None
-        max_iter = None
-        max_leaf_nodes = None
-        l2_regularization = None
-        colsample_bytree = None
-        max_bin = None
-        num_leaves = None
+            values["n_estimators"] = st.number_input("Number of trees", min_value=10, max_value=500, value=100, step=10, key=f"ntrees_{key_prefix}")
+
+        if pd.api.types.is_object_dtype(dataset[target_col]) or pd.api.types.is_categorical_dtype(dataset[target_col]):
+            values["class_weight"] = st.selectbox(
+                "Class weight",
+                options=[None, "balanced"],
+                format_func=lambda value: "None" if value is None else value,
+                key=f"classweight_{key_prefix}",
+            )
+
     elif model_name == "gradient_boosting":
         st.caption("Gradient Boosting uses shallow decision trees as weak learners.")
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             loss_options = ["squared_error", "absolute_error", "huber", "quantile"] if problem_type == "regression" else ["log_loss", "exponential"]
-            loss = st.selectbox("Loss", options=loss_options)
+            values["criterion"] = st.selectbox("Loss", options=loss_options, key=f"loss_{key_prefix}")
         with col2:
-            learning_rate = st.number_input("Learning rate", min_value=0.001, max_value=1.0, value=0.1, step=0.01, format="%.3f")
+            values["learning_rate"] = st.number_input("Learning rate", min_value=0.001, max_value=1.0, value=0.1, step=0.01, format="%.3f", key=f"lr_{key_prefix}")
         with col3:
-            n_estimators = st.number_input("Number of boosting stages", min_value=10, max_value=500, value=100, step=10)
+            values["n_estimators"] = st.number_input("Number of boosting stages", min_value=10, max_value=500, value=100, step=10, key=f"nstages_{key_prefix}")
         with col4:
-            subsample = st.number_input("Subsample", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f")
+            values["subsample"] = st.number_input("Subsample", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f", key=f"subsample_{key_prefix}")
         col5, col6 = st.columns(2)
         with col5:
-            max_depth = st.number_input("Max depth", min_value=1, max_value=20, value=3, step=1)
+            values["max_depth"] = st.number_input("Max depth", min_value=1, max_value=20, value=3, step=1, key=f"maxdepth_{key_prefix}")
         with col6:
-            min_samples_split = st.number_input("Min samples split", min_value=2, max_value=100, value=int(DEFAULT_MIN_SAMPLES_SPLIT), step=1)
-        min_samples_leaf = st.number_input("Min samples leaf", min_value=1, max_value=100, value=int(DEFAULT_MIN_SAMPLES_LEAF), step=1)
-        max_iter = None
-        max_leaf_nodes = None
-        l2_regularization = None
-        criterion = loss
+            values["min_samples_split"] = st.number_input("Min samples split", min_value=2, max_value=100, value=int(DEFAULT_MIN_SAMPLES_SPLIT), step=1, key=f"minsplit_{key_prefix}")
+        values["min_samples_leaf"] = st.number_input("Min samples leaf", min_value=1, max_value=100, value=int(DEFAULT_MIN_SAMPLES_LEAF), step=1, key=f"minleaf_{key_prefix}")
+
     elif model_name == "hist_gradient_boosting":
         st.caption("HistGradientBoosting is optimized for larger tabular datasets and does not expose a plottable tree structure.")
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            learning_rate = st.number_input("Learning rate", min_value=0.001, max_value=1.0, value=0.1, step=0.01, format="%.3f")
+            values["learning_rate"] = st.number_input("Learning rate", min_value=0.001, max_value=1.0, value=0.1, step=0.01, format="%.3f", key=f"lr_{key_prefix}")
         with col2:
-            max_iter = st.number_input("Max iterations", min_value=10, max_value=1000, value=100, step=10)
+            values["max_iter"] = st.number_input("Max iterations", min_value=10, max_value=1000, value=100, step=10, key=f"maxiter_{key_prefix}")
         with col3:
-            max_depth = st.number_input("Max depth", min_value=1, max_value=20, value=3, step=1)
+            values["max_depth"] = st.number_input("Max depth", min_value=1, max_value=20, value=3, step=1, key=f"maxdepth_{key_prefix}")
         with col4:
-            min_samples_leaf = st.number_input("Min samples leaf", min_value=1, max_value=100, value=20, step=1)
+            values["min_samples_leaf"] = st.number_input("Min samples leaf", min_value=1, max_value=100, value=20, step=1, key=f"minleaf_{key_prefix}")
         col5, col6 = st.columns(2)
         with col5:
-            max_leaf_nodes = st.number_input("Max leaf nodes", min_value=2, max_value=255, value=31, step=1)
+            values["max_leaf_nodes"] = st.number_input("Max leaf nodes", min_value=2, max_value=255, value=31, step=1, key=f"maxleaf_{key_prefix}")
         with col6:
-            l2_regularization = st.number_input("L2 regularization", min_value=0.0, max_value=10.0, value=0.0, step=0.1, format="%.3f")
-        criterion = None
-        min_samples_split = None
-        subsample = None
-        n_estimators = None
-        colsample_bytree = None
-        max_bin = None
-        num_leaves = None
-    else:
+            values["l2_regularization"] = st.number_input("L2 regularization", min_value=0.0, max_value=10.0, value=0.0, step=0.1, format="%.3f", key=f"l2_{key_prefix}")
+
+    elif model_name == "adaboost":
         st.caption("AdaBoost combines many weak learners into a stronger ensemble.")
         col1, col2 = st.columns(2)
         with col1:
-            n_estimators = st.number_input("Number of estimators", min_value=10, max_value=500, value=50, step=10)
+            values["n_estimators"] = st.number_input("Number of estimators", min_value=10, max_value=500, value=50, step=10, key=f"nestimators_{key_prefix}")
         with col2:
-            learning_rate = st.number_input("Learning rate", min_value=0.001, max_value=1.0, value=1.0, step=0.05, format="%.3f")
-        criterion = None
-        max_depth = None
-        min_samples_split = None
-        min_samples_leaf = None
-        subsample = None
-        max_iter = None
-        max_leaf_nodes = None
-        l2_regularization = None
-        colsample_bytree = None
-        max_bin = None
-        num_leaves = None
-        loss = None
+            values["learning_rate"] = st.number_input("Learning rate", min_value=0.001, max_value=1.0, value=1.0, step=0.05, format="%.3f", key=f"lr_{key_prefix}")
 
-    if model_name in {"xgboost", "lightgbm", "catboost"}:
+    elif model_name in {"xgboost", "lightgbm", "catboost"}:
         st.caption("These libraries can improve accuracy on tabular data but require extra dependencies.")
         col1, col2, col3 = st.columns(3)
         with col1:
-            n_estimators = st.number_input("Number of trees", min_value=10, max_value=1000, value=200, step=10)
+            values["n_estimators"] = st.number_input("Number of trees", min_value=10, max_value=1000, value=200, step=10, key=f"ntrees_{key_prefix}")
         with col2:
-            learning_rate = st.number_input("Learning rate", min_value=0.001, max_value=1.0, value=0.1, step=0.01, format="%.3f")
+            values["learning_rate"] = st.number_input("Learning rate", min_value=0.001, max_value=1.0, value=0.1, step=0.01, format="%.3f", key=f"lr_{key_prefix}")
         with col3:
-            max_depth = st.number_input("Max depth", min_value=1, max_value=20, value=6, step=1)
+            values["max_depth"] = st.number_input("Max depth", min_value=1, max_value=20, value=6, step=1, key=f"maxdepth_{key_prefix}")
 
         if model_name == "xgboost":
             col4, col5 = st.columns(2)
             with col4:
-                subsample = st.number_input("Subsample", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f")
+                values["subsample"] = st.number_input("Subsample", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f", key=f"subsample_{key_prefix}")
             with col5:
-                colsample_bytree = st.number_input("Column sample by tree", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f")
-            criterion = None
-            min_samples_split = None
-            min_samples_leaf = None
-            max_iter = None
-            max_leaf_nodes = None
-            l2_regularization = None
-            num_leaves = None
-            max_bin = None
+                values["colsample_bytree"] = st.number_input("Column sample by tree", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f", key=f"colsample_{key_prefix}")
         elif model_name == "lightgbm":
             col4, col5 = st.columns(2)
             with col4:
-                subsample = st.number_input("Subsample", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f")
+                values["subsample"] = st.number_input("Subsample", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f", key=f"subsample_{key_prefix}")
             with col5:
-                colsample_bytree = st.number_input("Feature fraction", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f")
-            num_leaves = st.number_input("Num leaves", min_value=2, max_value=255, value=31, step=1)
-            l2_regularization = st.number_input("L2 regularization", min_value=0.0, max_value=10.0, value=0.0, step=0.1, format="%.3f")
-            criterion = None
-            min_samples_split = None
-            min_samples_leaf = None
-            max_iter = None
-            max_leaf_nodes = None
-            max_bin = None
+                values["colsample_bytree"] = st.number_input("Feature fraction", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f", key=f"colsample_{key_prefix}")
+            values["num_leaves"] = st.number_input("Num leaves", min_value=2, max_value=255, value=31, step=1, key=f"numleaves_{key_prefix}")
+            values["l2_regularization"] = st.number_input("L2 regularization", min_value=0.0, max_value=10.0, value=0.0, step=0.1, format="%.3f", key=f"l2_{key_prefix}")
         else:
             col4, col5 = st.columns(2)
             with col4:
-                subsample = st.number_input("RSM", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f")
+                values["subsample"] = st.number_input("RSM", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f", key=f"rsm_{key_prefix}")
             with col5:
-                max_bin = st.number_input("Max bin", min_value=32, max_value=255, value=254, step=1)
-            criterion = None
-            min_samples_split = None
-            min_samples_leaf = None
-            max_iter = None
-            max_leaf_nodes = None
-            l2_regularization = None
-            colsample_bytree = None
-            num_leaves = None
+                values["max_bin"] = st.number_input("Max bin", min_value=32, max_value=255, value=254, step=1, key=f"maxbin_{key_prefix}")
 
-    class_weight = None
-    if model_name in {"decision_tree", "random_forest", "extra_trees"} and (pd.api.types.is_object_dtype(dataset[target_col]) or pd.api.types.is_categorical_dtype(dataset[target_col])):
-        class_weight = st.selectbox("Class weight", options=[None, "balanced"], format_func=lambda value: "None" if value is None else value)
+    return values
 
-    train_trigger = st.button("Train Model", type="primary")
+
+def build_tree_params(model_name: str, problem_type: str, random_state: int, values: dict[str, Any]) -> dict[str, Any]:
+    """Translate collected widget values into estimator constructor kwargs."""
+    tree_params: dict[str, Any] = {"random_state": int(random_state)}
+
+    if model_name in {"decision_tree", "random_forest", "extra_trees"}:
+        tree_params.update(
+            {
+                "criterion": values["criterion"],
+                "max_depth": int(values["max_depth"]),
+                "min_samples_split": int(values["min_samples_split"]),
+                "min_samples_leaf": int(values["min_samples_leaf"]),
+            }
+        )
+        if values["n_estimators"] is not None:
+            tree_params["n_estimators"] = int(values["n_estimators"])
+        if values["class_weight"] is not None and problem_type == "classification":
+            tree_params["class_weight"] = values["class_weight"]
+    elif model_name == "gradient_boosting":
+        tree_params.update(
+            {
+                "loss": values["criterion"],
+                "learning_rate": float(values["learning_rate"]),
+                "n_estimators": int(values["n_estimators"]),
+                "subsample": float(values["subsample"]),
+                "max_depth": int(values["max_depth"]),
+                "min_samples_split": int(values["min_samples_split"]),
+                "min_samples_leaf": int(values["min_samples_leaf"]),
+            }
+        )
+    elif model_name == "hist_gradient_boosting":
+        tree_params.update(
+            {
+                "learning_rate": float(values["learning_rate"]),
+                "max_iter": int(values["max_iter"]),
+                "max_depth": int(values["max_depth"]),
+                "min_samples_leaf": int(values["min_samples_leaf"]),
+                "max_leaf_nodes": int(values["max_leaf_nodes"]),
+                "l2_regularization": float(values["l2_regularization"]),
+            }
+        )
+    elif model_name == "adaboost":
+        tree_params.update(
+            {
+                "n_estimators": int(values["n_estimators"]),
+                "learning_rate": float(values["learning_rate"]),
+            }
+        )
+    elif model_name == "xgboost":
+        tree_params.update(
+            {
+                "n_estimators": int(values["n_estimators"]),
+                "learning_rate": float(values["learning_rate"]),
+                "max_depth": int(values["max_depth"]),
+                "subsample": float(values["subsample"]),
+                "colsample_bytree": float(values["colsample_bytree"]),
+                "tree_method": "hist",
+                "eval_metric": "logloss" if problem_type == "classification" else "rmse",
+                "verbosity": 0,
+            }
+        )
+    elif model_name == "lightgbm":
+        tree_params.update(
+            {
+                "n_estimators": int(values["n_estimators"]),
+                "learning_rate": float(values["learning_rate"]),
+                "max_depth": int(values["max_depth"]),
+                "subsample": float(values["subsample"]),
+                "colsample_bytree": float(values["colsample_bytree"]),
+                "num_leaves": int(values["num_leaves"]),
+                "reg_lambda": float(values["l2_regularization"]),
+                "verbosity": -1,
+            }
+        )
+    elif model_name == "catboost":
+        tree_params.update(
+            {
+                "iterations": int(values["n_estimators"]),
+                "learning_rate": float(values["learning_rate"]),
+                "depth": int(values["max_depth"]),
+                "random_seed": int(random_state),
+                "verbose": False,
+            }
+        )
+
+    return tree_params
+
+
+def render_tree_visualization_section(artifacts: ModelArtifacts, model_name: str) -> None:
+    st.markdown("### Tree Visualization")
+    model_obj = artifacts.pipeline.named_steps["model"]
+    estimator_count = get_tree_estimator_count(model_obj)
+    if estimator_count <= 0:
+        st.info("Tree visualization is not available for this model type.")
+        return
+
+    estimator_index = 0
+    if estimator_count > 1:
+        max_selectable = min(estimator_count, 50)
+        tree_choice = st.selectbox(
+            f"Select a tree to inspect (1-{max_selectable} of {estimator_count})",
+            options=list(range(1, max_selectable + 1)),
+            key=f"tree_index_{model_name}",
+        )
+        estimator_index = tree_choice - 1
+        if estimator_count > 50:
+            st.caption(f"Showing the first 50 of {estimator_count:,} trees to keep the app responsive.")
+
+    tree_depth = get_tree_depth(model_obj, estimator_index)
+    if tree_depth <= 0:
+        st.info("Tree visualization is not available for this model.")
+        return
+
+    if tree_depth <= 1:
+        st.caption("The trained tree is shallow, so visualization depth is fixed at 1.")
+        depth_limit = 1
+    else:
+        depth_limit = st.slider(
+            "Visualization depth limit",
+            min_value=1,
+            max_value=tree_depth,
+            value=min(4, tree_depth),
+            key=f"depth_{model_name}",
+        )
+
+    try:
+        fig = plot_tree_figure(
+            model_obj,
+            artifacts.feature_names,
+            artifacts.classes_,
+            max_depth=depth_limit,
+            estimator_index=estimator_index,
+        )
+    except ValueError as exc:
+        st.info(str(exc))
+        return
+
+    if estimator_count > 1:
+        st.caption(f"Showing tree {estimator_index + 1} of {estimator_count}.")
+
+    image_bytes = None
+    try:
+        image_bytes = figure_to_png_bytes(fig)
+        svg_markup = figure_to_svg_markup(fig)
+        viewer_id = f"{model_name}-{estimator_index}-{depth_limit}"
+        components.html(build_tree_viewer_html(svg_markup, viewer_id, height=620), height=650, scrolling=False)
+    except Exception:
+        LOGGER.exception("Falling back to static tree rendering")
+        st.pyplot(fig, clear_figure=False)
+    finally:
+        plt.close(fig)
+
+    if image_bytes is not None:
+        st.download_button(
+            "Download tree visualization",
+            data=image_bytes,
+            file_name="decision_tree.png",
+            mime="image/png",
+            key=f"download_{model_name}",
+        )
+
+
+def render_model_page(model_name: str) -> None:
+    meta = get_model_meta(model_name)
+    st.markdown(f"## {meta['icon']}  {meta['label']}")
+    st.caption(meta["description"])
+
+    dataset = st.session_state.dataset
+    if dataset is None:
+        render_empty_state(
+            "No dataset uploaded yet",
+            "Upload a dataset first, then come back to configure and train this model.",
+            action_label="Upload Dataset",
+            action_page="dataset",
+        )
+        return
+
+    numeric_cols, categorical_cols, unsupported_cols = detect_supported_columns(dataset)
+    if unsupported_cols:
+        st.warning(f"Unsupported columns were detected and will be ignored automatically: {', '.join(unsupported_cols)}")
+
+    with st.container(border=True):
+        st.markdown("#### Data & Training Setup")
+        target_col = st.selectbox(
+            "Target column",
+            options=list(dataset.columns),
+            index=len(dataset.columns) - 1,
+            key=f"target_{model_name}",
+        )
+        feature_candidates = [column for column in dataset.columns if column != target_col and column not in unsupported_cols]
+        selected_features = st.multiselect(
+            "Feature columns",
+            options=feature_candidates,
+            default=feature_candidates,
+            key=f"features_{model_name}",
+        )
+        col_a, col_b = st.columns(2)
+        with col_a:
+            train_size = 1 - st.slider(
+                "Test split", min_value=0.1, max_value=0.5, value=float(DEFAULT_TEST_SIZE), step=0.05, key=f"split_{model_name}"
+            )
+        with col_b:
+            random_state = st.number_input("Random state", value=int(DEFAULT_RANDOM_STATE), step=1, key=f"seed_{model_name}")
+
+    if not selected_features:
+        st.warning("Select at least one feature column.")
+        return
+
+    problem_type = determine_problem_type(dataset[target_col])
+
+    with st.container(border=True):
+        st.markdown("#### Model Configuration")
+        config_values = render_model_config(model_name, problem_type, dataset, target_col)
+
+    train_trigger = st.button("Train Model", type="primary", key=f"train_{model_name}")
 
     if train_trigger:
         try:
@@ -530,88 +909,11 @@ def main() -> None:
                 stratify=stratify,
             )
 
-            tree_params: dict[str, Any] = {"random_state": int(random_state)}
-            if model_name in {"decision_tree", "random_forest", "extra_trees"}:
-                tree_params.update(
-                    {
-                        "criterion": criterion,
-                        "max_depth": int(max_depth),
-                        "min_samples_split": int(min_samples_split),
-                        "min_samples_leaf": int(min_samples_leaf),
-                    }
-                )
-                if n_estimators is not None:
-                    tree_params["n_estimators"] = int(n_estimators)
-                if class_weight is not None and problem_type == "classification":
-                    tree_params["class_weight"] = class_weight
-            elif model_name == "gradient_boosting":
-                tree_params.update(
-                    {
-                        "loss": criterion,
-                        "learning_rate": float(learning_rate),
-                        "n_estimators": int(n_estimators),
-                        "subsample": float(subsample),
-                        "max_depth": int(max_depth),
-                        "min_samples_split": int(min_samples_split),
-                        "min_samples_leaf": int(min_samples_leaf),
-                    }
-                )
-            elif model_name == "hist_gradient_boosting":
-                tree_params.update(
-                    {
-                        "learning_rate": float(learning_rate),
-                        "max_iter": int(max_iter),
-                        "max_depth": int(max_depth),
-                        "min_samples_leaf": int(min_samples_leaf),
-                        "max_leaf_nodes": int(max_leaf_nodes),
-                        "l2_regularization": float(l2_regularization),
-                    }
-                )
-            elif model_name == "adaboost":
-                tree_params.update(
-                    {
-                        "n_estimators": int(n_estimators),
-                        "learning_rate": float(learning_rate),
-                    }
-                )
-            elif model_name == "xgboost":
-                tree_params.update(
-                    {
-                        "n_estimators": int(n_estimators),
-                        "learning_rate": float(learning_rate),
-                        "max_depth": int(max_depth),
-                        "subsample": float(subsample),
-                        "colsample_bytree": float(colsample_bytree),
-                        "tree_method": "hist",
-                        "eval_metric": "logloss" if problem_type == "classification" else "rmse",
-                        "verbosity": 0,
-                    }
-                )
-            elif model_name == "lightgbm":
-                tree_params.update(
-                    {
-                        "n_estimators": int(n_estimators),
-                        "learning_rate": float(learning_rate),
-                        "max_depth": int(max_depth),
-                        "subsample": float(subsample),
-                        "colsample_bytree": float(colsample_bytree),
-                        "num_leaves": int(num_leaves),
-                        "reg_lambda": float(l2_regularization),
-                        "verbosity": -1,
-                    }
-                )
-            elif model_name == "catboost":
-                tree_params.update(
-                    {
-                        "iterations": int(n_estimators),
-                        "learning_rate": float(learning_rate),
-                        "depth": int(max_depth),
-                        "random_seed": int(random_state),
-                        "verbose": False,
-                    }
-                )
+            tree_params = build_tree_params(model_name, problem_type, random_state, config_values)
 
-            with st.spinner(f"Training the {model_label.lower()}..."):
+            status = st.status(f"Generating {meta['label']} model...", expanded=True)
+            with status:
+                status.write("Processing dataset...")
                 pipeline, feature_names, class_names, target_encoder = build_training_pipeline(
                     X_train,
                     y_train,
@@ -621,17 +923,20 @@ def main() -> None:
                     model_name,
                     tree_params,
                 )
+                status.write("Training model...")
 
-            train_predictions = pipeline.predict(X_train)
-            test_predictions = pipeline.predict(X_test)
-            if target_encoder is not None:
-                y_train_eval = target_encoder.transform(y_train.astype(str))
-                y_test_eval = target_encoder.transform(y_test.astype(str))
-            else:
-                y_train_eval = y_train
-                y_test_eval = y_test
-            train_metrics = evaluate_predictions(y_train_eval, train_predictions, problem_type)
-            test_metrics = evaluate_predictions(y_test_eval, test_predictions, problem_type)
+                train_predictions = pipeline.predict(X_train)
+                test_predictions = pipeline.predict(X_test)
+                if target_encoder is not None:
+                    y_train_eval = target_encoder.transform(y_train.astype(str))
+                    y_test_eval = target_encoder.transform(y_test.astype(str))
+                else:
+                    y_train_eval = y_train
+                    y_test_eval = y_test
+                train_metrics = evaluate_predictions(y_train_eval, train_predictions, problem_type)
+                test_metrics = evaluate_predictions(y_test_eval, test_predictions, problem_type)
+                status.write("Building visualization...")
+                status.update(label=f"{meta['label']} trained successfully.", state="complete")
 
             st.session_state.metrics = {"train": train_metrics, "test": test_metrics}
             st.session_state.train_metrics = train_metrics
@@ -648,7 +953,11 @@ def main() -> None:
                 classes_=class_names,
                 target_encoder=target_encoder,
             )
-            st.success("Model trained successfully.")
+            st.session_state.trained_model_name = model_name
+            st.session_state.last_train_meta = {
+                "tree_params": tree_params,
+                "n_samples": int(len(dataset)),
+            }
             st.session_state.training_signature = build_signature(
                 {
                     "dataset": st.session_state.dataset_signature,
@@ -661,76 +970,48 @@ def main() -> None:
             )
         except Exception as exc:
             LOGGER.exception("Model training failed")
-            st.error(str(exc))
+            render_error("Unable to generate the model. Please check your dataset and model configuration.", exc)
             return
 
     artifacts = st.session_state.artifacts
-    if artifacts is not None and st.session_state.metrics is not None:
-        render_evaluation(st.session_state.test_metrics, artifacts.problem_type)
-        if artifacts.problem_type == "classification":
-            render_confusion_matrix(st.session_state.test_metrics)
+    if artifacts is None or st.session_state.metrics is None or st.session_state.trained_model_name != model_name:
+        render_empty_state(
+            "No model generated yet",
+            'Configure the parameters above and click "Train Model" to see results here.',
+        )
+        return
 
-        render_feature_importance(artifacts.pipeline.named_steps["model"], artifacts.feature_names)
-
-        st.markdown("### Tree Visualization")
-        tree_depth = get_tree_depth(artifacts.pipeline.named_steps["model"])
-        if tree_depth <= 0:
-            st.info("Tree visualization is not available for this model.")
-        else:
-            if tree_depth <= 1:
-                st.caption("The trained tree is shallow, so visualization depth is fixed at 1.")
-                depth_limit = 1
-            else:
-                depth_limit = st.slider(
-                    "Visualization depth limit",
-                    min_value=1,
-                    max_value=tree_depth,
-                    value=min(4, tree_depth),
-                )
-            try:
-                fig = plot_tree_figure(
-                    artifacts.pipeline.named_steps["model"],
-                    artifacts.feature_names,
-                    artifacts.classes_,
-                    max_depth=depth_limit,
-                )
-            except ValueError as exc:
-                st.info(str(exc))
-            else:
-                if hasattr(artifacts.pipeline.named_steps["model"], "estimators_"):
-                    st.caption("The visualization shows the first tree in the ensemble.")
-                image_bytes = None
-                svg_data_uri = None
-                try:
-                    image_bytes = figure_to_png_bytes(fig)
-                    svg_data_uri = figure_to_svg_data_uri(fig)
-                except Exception:
-                    image_bytes = None
-
-                if svg_data_uri is not None:
-                    st.markdown(
-                        f'<img src="{svg_data_uri}" style="width:100%;height:auto;display:block;" />',
-                        unsafe_allow_html=True,
-                    )
-                elif image_bytes is not None:
-                    st.image(image_bytes, use_container_width=True)
-                else:
-                    st.pyplot(fig, clear_figure=False)
-
-                if image_bytes is not None:
-                    st.download_button(
-                        "Download tree visualization",
-                        data=image_bytes,
-                        file_name="decision_tree.png",
-                        mime="image/png",
-                    )
-
-        render_prediction_form(artifacts, dataset)
-
-    st.markdown("### About")
-    st.write(
-        "This app uses a scikit-learn tree-based pipeline with built-in preprocessing, train/test splitting, evaluation, and per-session prediction support."
+    train_meta = st.session_state.last_train_meta or {}
+    render_model_info_cards(
+        artifacts,
+        model_name,
+        train_meta.get("tree_params", {}),
+        train_meta.get("n_samples", len(dataset)),
     )
+    render_evaluation(st.session_state.test_metrics, artifacts.problem_type)
+    if artifacts.problem_type == "classification":
+        render_confusion_matrix(st.session_state.test_metrics)
+
+    render_feature_importance(artifacts.pipeline.named_steps["model"], artifacts.feature_names)
+    render_tree_visualization_section(artifacts, model_name)
+    render_prediction_form(artifacts, dataset)
+
+
+def main() -> None:
+    init_state()
+    st.markdown(CSS, unsafe_allow_html=True)
+    render_sidebar()
+
+    page = st.session_state.nav_page
+    if page == "dashboard":
+        render_dashboard()
+    elif page == "dataset":
+        render_dataset_page()
+    elif page in MODEL_KEYS:
+        render_model_page(page)
+    else:
+        st.session_state.nav_page = "dashboard"
+        render_dashboard()
 
 
 if __name__ == "__main__":

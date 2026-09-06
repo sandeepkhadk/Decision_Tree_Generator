@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 
 
-APP_NAME = os.getenv("APP_NAME", "Decision Tree Generator")
+APP_NAME = os.getenv("APP_NAME", "ML Tree Studio")
 APP_TAGLINE = os.getenv(
     "APP_TAGLINE",
-    "Upload a dataset, train a decision tree, inspect the model, and make predictions.",
+    "Build, configure, and visualize tree-based machine learning models interactively.",
 )
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "20"))
 DEFAULT_TEST_SIZE = float(os.getenv("DEFAULT_TEST_SIZE", "0.2"))

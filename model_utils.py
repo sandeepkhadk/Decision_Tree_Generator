@@ -33,6 +33,89 @@ from sklearn.ensemble import (
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 
+MODEL_CATALOG: list[dict[str, str]] = [
+    {
+        "name": "decision_tree",
+        "label": "Decision Tree",
+        "icon": "🌳",
+        "description": "Configure and visualize a single, fully interpretable decision tree.",
+    },
+    {
+        "name": "random_forest",
+        "label": "Random Forest",
+        "icon": "🌲",
+        "description": "Build and explore an ensemble of bagged decision trees.",
+    },
+    {
+        "name": "extra_trees",
+        "label": "Extra Trees",
+        "icon": "🌿",
+        "description": "Train an extremely randomized tree ensemble for fast, low-variance predictions.",
+    },
+    {
+        "name": "gradient_boosting",
+        "label": "Gradient Boosting",
+        "icon": "⚡",
+        "description": "Sequentially boost shallow trees to minimize prediction error.",
+    },
+    {
+        "name": "hist_gradient_boosting",
+        "label": "HistGradientBoosting",
+        "icon": "📈",
+        "description": "Train a histogram-based boosting model built for large tabular datasets.",
+    },
+    {
+        "name": "adaboost",
+        "label": "AdaBoost",
+        "icon": "🚀",
+        "description": "Combine many weak learners into a single, reweighted ensemble.",
+    },
+    {
+        "name": "xgboost",
+        "label": "XGBoost",
+        "icon": "🧩",
+        "description": "Train a high-performance gradient boosting model with XGBoost.",
+    },
+    {
+        "name": "lightgbm",
+        "label": "LightGBM",
+        "icon": "🔥",
+        "description": "Train a fast, leaf-wise gradient boosting model with LightGBM.",
+    },
+    {
+        "name": "catboost",
+        "label": "CatBoost",
+        "icon": "🐱",
+        "description": "Train a gradient boosting model tuned for categorical-heavy data.",
+    },
+]
+
+MODEL_LOOKUP = {entry["name"]: entry for entry in MODEL_CATALOG}
+
+
+def get_model_meta(model_name: str) -> dict[str, str]:
+    """Look up display metadata for a model, falling back to a generic entry."""
+    return MODEL_LOOKUP.get(
+        model_name,
+        {"name": model_name, "label": model_name.replace("_", " ").title(), "icon": "🔷", "description": ""},
+    )
+
+
+def get_estimator_count(model) -> int | None:
+    """Best-effort count of estimators/iterations a fitted model actually used."""
+    for attr in ("n_estimators", "n_iter_", "tree_count_"):
+        value = getattr(model, attr, None)
+        if isinstance(value, (int, np.integer)):
+            return int(value)
+    estimators = getattr(model, "estimators_", None)
+    if estimators is not None:
+        try:
+            return len(estimators)
+        except TypeError:
+            return None
+    return None
+
+
 @dataclass(slots=True)
 class ModelArtifacts:
     pipeline: Any
