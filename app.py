@@ -624,10 +624,14 @@ def main() -> None:
 
             train_predictions = pipeline.predict(X_train)
             test_predictions = pipeline.predict(X_test)
-            train_predictions = decode_predictions(train_predictions, target_encoder)
-            test_predictions = decode_predictions(test_predictions, target_encoder)
-            train_metrics = evaluate_predictions(y_train, train_predictions, problem_type)
-            test_metrics = evaluate_predictions(y_test, test_predictions, problem_type)
+            if target_encoder is not None:
+                y_train_eval = target_encoder.transform(y_train.astype(str))
+                y_test_eval = target_encoder.transform(y_test.astype(str))
+            else:
+                y_train_eval = y_train
+                y_test_eval = y_test
+            train_metrics = evaluate_predictions(y_train_eval, train_predictions, problem_type)
+            test_metrics = evaluate_predictions(y_test_eval, test_predictions, problem_type)
 
             st.session_state.metrics = {"train": train_metrics, "test": test_metrics}
             st.session_state.train_metrics = train_metrics
