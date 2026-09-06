@@ -31,8 +31,8 @@ from data_utils import (
     summarize_dataset,
     validate_file_size,
 )
+import model_utils as model_utils_module
 from model_utils import (
-    MODEL_CATALOG,
     ModelArtifacts,
     decode_predictions,
     encode_classification_target,
@@ -59,6 +59,64 @@ LOGGER = logging.getLogger(__name__)
 
 st.set_page_config(page_title=APP_NAME, page_icon="🌳", layout="wide")
 
+DEFAULT_MODEL_CATALOG = [
+    {
+        "name": "decision_tree",
+        "label": "Decision Tree",
+        "icon": "🌳",
+        "description": "Configure and visualize a single, fully interpretable decision tree.",
+    },
+    {
+        "name": "random_forest",
+        "label": "Random Forest",
+        "icon": "🌲",
+        "description": "Build and explore an ensemble of bagged decision trees.",
+    },
+    {
+        "name": "extra_trees",
+        "label": "Extra Trees",
+        "icon": "🌿",
+        "description": "Train an extremely randomized tree ensemble for fast, low-variance predictions.",
+    },
+    {
+        "name": "gradient_boosting",
+        "label": "Gradient Boosting",
+        "icon": "⚡",
+        "description": "Sequentially boost shallow trees to minimize prediction error.",
+    },
+    {
+        "name": "hist_gradient_boosting",
+        "label": "HistGradientBoosting",
+        "icon": "📈",
+        "description": "Train a histogram-based boosting model built for large tabular datasets.",
+    },
+    {
+        "name": "adaboost",
+        "label": "AdaBoost",
+        "icon": "🚀",
+        "description": "Combine many weak learners into a single, reweighted ensemble.",
+    },
+    {
+        "name": "xgboost",
+        "label": "XGBoost",
+        "icon": "🧩",
+        "description": "Train a high-performance gradient boosting model with XGBoost.",
+    },
+    {
+        "name": "lightgbm",
+        "label": "LightGBM",
+        "icon": "🔥",
+        "description": "Train a fast, leaf-wise gradient boosting model with LightGBM.",
+    },
+    {
+        "name": "catboost",
+        "label": "CatBoost",
+        "icon": "🐱",
+        "description": "Train a gradient boosting model tuned for categorical-heavy data.",
+    },
+]
+
+MODEL_CATALOG = getattr(model_utils_module, "MODEL_CATALOG", DEFAULT_MODEL_CATALOG)
 MODEL_KEYS = [entry["name"] for entry in MODEL_CATALOG]
 
 
