@@ -32,6 +32,8 @@ from data_utils import (
 )
 from model_utils import (
     ModelArtifacts,
+    decode_predictions,
+    encode_classification_target,
     create_model,
     determine_problem_type,
     evaluate_predictions,
@@ -154,20 +156,25 @@ def build_training_pipeline(
     feature_columns: list[str],
     target_name: str,
     problem_type: str,
+    model_name: str,
     tree_params: dict[str, Any],
-) -> tuple[Pipeline, list[str], list[str] | None]:
+) -> tuple[Pipeline, list[str], list[str] | None, Any | None]:
     numeric_cols, categorical_cols = detect_column_types(X_train)
     preprocessor = create_preprocessor(numeric_cols, categorical_cols, X_train)
-    estimator = create_model(problem_type, tree_params)
+    estimator = create_model(model_name, problem_type, tree_params)
+    target_encoder = None
+    y_fit = y_train
+    if problem_type == "classification":
+        y_fit, target_encoder = encode_classification_target(y_train)
     pipeline = Pipeline([
         ("preprocessor", preprocessor),
         ("model", estimator),
     ])
-    pipeline.fit(X_train, y_train)
+    pipeline.fit(X_train, y_fit)
 
     fitted_preprocessor = pipeline.named_steps["preprocessor"]
     feature_names = get_feature_names(fitted_preprocessor)
-    class_names = [str(value) for value in pipeline.named_steps["model"].classes_] if problem_type == "classification" else None
+    class_names = [str(value) for value in target_encoder.classes_] if target_encoder is not None else None
 
     artifacts = ModelArtifacts(
         pipeline=pipeline,
@@ -179,9 +186,29 @@ def build_training_pipeline(
         categorical_columns=categorical_cols,
         numeric_columns=numeric_cols,
         classes_=class_names,
+        target_encoder=target_encoder,
     )
     st.session_state.artifacts = artifacts
-    return pipeline, feature_names, class_names
+    return pipeline, feature_names, class_names, target_encoder
+
+
+def render_feature_importance(model, feature_names: list[str]) -> None:
+    if not hasattr(model, "feature_importances_"):
+        return
+
+    importances = pd.Series(model.feature_importances_, index=feature_names)
+    importances = importances[importances > 0].sort_values(ascending=False).head(20)
+    if importances.empty:
+        return
+
+    st.markdown("### Feature Importance")
+    figure, axis = plt.subplots(figsize=(10, max(4, 0.35 * len(importances) + 2)), dpi=180)
+    importances.sort_values().plot(kind="barh", ax=axis, color="#2563eb")
+    axis.set_xlabel("Importance")
+    axis.set_ylabel("Feature")
+    axis.set_title("Top Features")
+    figure.tight_layout()
+    st.pyplot(figure, clear_figure=False)
 
 
 def render_prediction_form(artifacts: ModelArtifacts, dataset: pd.DataFrame) -> None:
@@ -211,6 +238,7 @@ def render_prediction_form(artifacts: ModelArtifacts, dataset: pd.DataFrame) -> 
 
     input_frame = pd.DataFrame([inputs])
     prediction = artifacts.pipeline.predict(input_frame)[0]
+    prediction = decode_predictions([prediction], artifacts.target_encoder)[0]
     st.session_state.prediction = prediction
 
     st.markdown(
@@ -220,7 +248,8 @@ def render_prediction_form(artifacts: ModelArtifacts, dataset: pd.DataFrame) -> 
 
     if artifacts.problem_type == "classification" and hasattr(artifacts.pipeline.named_steps["model"], "predict_proba"):
         probabilities = artifacts.pipeline.predict_proba(input_frame)[0]
-        proba_frame = pd.DataFrame({"Class": artifacts.pipeline.named_steps["model"].classes_, "Probability": probabilities})
+        class_labels = artifacts.target_encoder.classes_ if artifacts.target_encoder is not None else artifacts.pipeline.named_steps["model"].classes_
+        proba_frame = pd.DataFrame({"Class": class_labels, "Probability": probabilities})
         st.dataframe(proba_frame, use_container_width=True)
 
 
@@ -315,21 +344,162 @@ def main() -> None:
     random_state = st.number_input("Random state", value=int(DEFAULT_RANDOM_STATE), step=1)
 
     problem_type = determine_problem_type(dataset[target_col])
+    model_options = [
+        ("Decision Tree", "decision_tree"),
+        ("Random Forest", "random_forest"),
+        ("Extra Trees", "extra_trees"),
+        ("Gradient Boosting", "gradient_boosting"),
+        ("HistGradientBoosting", "hist_gradient_boosting"),
+        ("AdaBoost", "adaboost"),
+    ]
+    model_label = st.selectbox("Model type", options=[label for label, _ in model_options])
+    model_name = dict(model_options)[model_label]
 
-    st.markdown("#### Decision Tree Configuration")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        criterion_options = ["squared_error", "friedman_mse", "absolute_error", "poisson"] if problem_type == "regression" else ["gini", "entropy", "log_loss"]
-        criterion = st.selectbox("Criterion", options=criterion_options)
-    with col2:
-        max_depth = st.number_input("Max depth", min_value=1, max_value=100, value=int(DEFAULT_MAX_DEPTH), step=1)
-    with col3:
-        min_samples_split = st.number_input("Min samples split", min_value=2, max_value=100, value=int(DEFAULT_MIN_SAMPLES_SPLIT), step=1)
-    with col4:
+    st.markdown("#### Tree Model Configuration")
+    if model_name in {"decision_tree", "random_forest", "extra_trees"}:
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            criterion_options = ["squared_error", "friedman_mse", "absolute_error", "poisson"] if problem_type == "regression" else ["gini", "entropy", "log_loss"]
+            criterion = st.selectbox("Criterion", options=criterion_options)
+        with col2:
+            max_depth = st.number_input("Max depth", min_value=1, max_value=100, value=int(DEFAULT_MAX_DEPTH), step=1)
+        with col3:
+            min_samples_split = st.number_input("Min samples split", min_value=2, max_value=100, value=int(DEFAULT_MIN_SAMPLES_SPLIT), step=1)
+        with col4:
+            min_samples_leaf = st.number_input("Min samples leaf", min_value=1, max_value=100, value=int(DEFAULT_MIN_SAMPLES_LEAF), step=1)
+
+        if model_name in {"random_forest", "extra_trees"}:
+            n_estimators = st.number_input("Number of trees", min_value=10, max_value=500, value=100, step=10)
+        else:
+            n_estimators = None
+        learning_rate = None
+        subsample = None
+        max_iter = None
+        max_leaf_nodes = None
+        l2_regularization = None
+        colsample_bytree = None
+        max_bin = None
+        num_leaves = None
+    elif model_name == "gradient_boosting":
+        st.caption("Gradient Boosting uses shallow decision trees as weak learners.")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            loss_options = ["squared_error", "absolute_error", "huber", "quantile"] if problem_type == "regression" else ["log_loss", "exponential"]
+            loss = st.selectbox("Loss", options=loss_options)
+        with col2:
+            learning_rate = st.number_input("Learning rate", min_value=0.001, max_value=1.0, value=0.1, step=0.01, format="%.3f")
+        with col3:
+            n_estimators = st.number_input("Number of boosting stages", min_value=10, max_value=500, value=100, step=10)
+        with col4:
+            subsample = st.number_input("Subsample", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f")
+        col5, col6 = st.columns(2)
+        with col5:
+            max_depth = st.number_input("Max depth", min_value=1, max_value=20, value=3, step=1)
+        with col6:
+            min_samples_split = st.number_input("Min samples split", min_value=2, max_value=100, value=int(DEFAULT_MIN_SAMPLES_SPLIT), step=1)
         min_samples_leaf = st.number_input("Min samples leaf", min_value=1, max_value=100, value=int(DEFAULT_MIN_SAMPLES_LEAF), step=1)
+        max_iter = None
+        max_leaf_nodes = None
+        l2_regularization = None
+        criterion = loss
+    elif model_name == "hist_gradient_boosting":
+        st.caption("HistGradientBoosting is optimized for larger tabular datasets and does not expose a plottable tree structure.")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            learning_rate = st.number_input("Learning rate", min_value=0.001, max_value=1.0, value=0.1, step=0.01, format="%.3f")
+        with col2:
+            max_iter = st.number_input("Max iterations", min_value=10, max_value=1000, value=100, step=10)
+        with col3:
+            max_depth = st.number_input("Max depth", min_value=1, max_value=20, value=3, step=1)
+        with col4:
+            min_samples_leaf = st.number_input("Min samples leaf", min_value=1, max_value=100, value=20, step=1)
+        col5, col6 = st.columns(2)
+        with col5:
+            max_leaf_nodes = st.number_input("Max leaf nodes", min_value=2, max_value=255, value=31, step=1)
+        with col6:
+            l2_regularization = st.number_input("L2 regularization", min_value=0.0, max_value=10.0, value=0.0, step=0.1, format="%.3f")
+        criterion = None
+        min_samples_split = None
+        subsample = None
+        n_estimators = None
+        colsample_bytree = None
+        max_bin = None
+        num_leaves = None
+    else:
+        st.caption("AdaBoost combines many weak learners into a stronger ensemble.")
+        col1, col2 = st.columns(2)
+        with col1:
+            n_estimators = st.number_input("Number of estimators", min_value=10, max_value=500, value=50, step=10)
+        with col2:
+            learning_rate = st.number_input("Learning rate", min_value=0.001, max_value=1.0, value=1.0, step=0.05, format="%.3f")
+        criterion = None
+        max_depth = None
+        min_samples_split = None
+        min_samples_leaf = None
+        subsample = None
+        max_iter = None
+        max_leaf_nodes = None
+        l2_regularization = None
+        colsample_bytree = None
+        max_bin = None
+        num_leaves = None
+        loss = None
+
+    if model_name in {"xgboost", "lightgbm", "catboost"}:
+        st.caption("These libraries can improve accuracy on tabular data but require extra dependencies.")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            n_estimators = st.number_input("Number of trees", min_value=10, max_value=1000, value=200, step=10)
+        with col2:
+            learning_rate = st.number_input("Learning rate", min_value=0.001, max_value=1.0, value=0.1, step=0.01, format="%.3f")
+        with col3:
+            max_depth = st.number_input("Max depth", min_value=1, max_value=20, value=6, step=1)
+
+        if model_name == "xgboost":
+            col4, col5 = st.columns(2)
+            with col4:
+                subsample = st.number_input("Subsample", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f")
+            with col5:
+                colsample_bytree = st.number_input("Column sample by tree", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f")
+            criterion = None
+            min_samples_split = None
+            min_samples_leaf = None
+            max_iter = None
+            max_leaf_nodes = None
+            l2_regularization = None
+            num_leaves = None
+            max_bin = None
+        elif model_name == "lightgbm":
+            col4, col5 = st.columns(2)
+            with col4:
+                subsample = st.number_input("Subsample", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f")
+            with col5:
+                colsample_bytree = st.number_input("Feature fraction", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f")
+            num_leaves = st.number_input("Num leaves", min_value=2, max_value=255, value=31, step=1)
+            l2_regularization = st.number_input("L2 regularization", min_value=0.0, max_value=10.0, value=0.0, step=0.1, format="%.3f")
+            criterion = None
+            min_samples_split = None
+            min_samples_leaf = None
+            max_iter = None
+            max_leaf_nodes = None
+            max_bin = None
+        else:
+            col4, col5 = st.columns(2)
+            with col4:
+                subsample = st.number_input("RSM", min_value=0.1, max_value=1.0, value=1.0, step=0.05, format="%.2f")
+            with col5:
+                max_bin = st.number_input("Max bin", min_value=32, max_value=255, value=254, step=1)
+            criterion = None
+            min_samples_split = None
+            min_samples_leaf = None
+            max_iter = None
+            max_leaf_nodes = None
+            l2_regularization = None
+            colsample_bytree = None
+            num_leaves = None
 
     class_weight = None
-    if pd.api.types.is_object_dtype(dataset[target_col]) or pd.api.types.is_categorical_dtype(dataset[target_col]):
+    if model_name in {"decision_tree", "random_forest", "extra_trees"} and (pd.api.types.is_object_dtype(dataset[target_col]) or pd.api.types.is_categorical_dtype(dataset[target_col])):
         class_weight = st.selectbox("Class weight", options=[None, "balanced"], format_func=lambda value: "None" if value is None else value)
 
     train_trigger = st.button("Train Model", type="primary")
@@ -360,28 +530,102 @@ def main() -> None:
                 stratify=stratify,
             )
 
-            tree_params: dict[str, Any] = {
-                "criterion": criterion,
-                "max_depth": int(max_depth),
-                "min_samples_split": int(min_samples_split),
-                "min_samples_leaf": int(min_samples_leaf),
-                "random_state": int(random_state),
-            }
-            if class_weight is not None and problem_type == "classification":
-                tree_params["class_weight"] = class_weight
+            tree_params: dict[str, Any] = {"random_state": int(random_state)}
+            if model_name in {"decision_tree", "random_forest", "extra_trees"}:
+                tree_params.update(
+                    {
+                        "criterion": criterion,
+                        "max_depth": int(max_depth),
+                        "min_samples_split": int(min_samples_split),
+                        "min_samples_leaf": int(min_samples_leaf),
+                    }
+                )
+                if n_estimators is not None:
+                    tree_params["n_estimators"] = int(n_estimators)
+                if class_weight is not None and problem_type == "classification":
+                    tree_params["class_weight"] = class_weight
+            elif model_name == "gradient_boosting":
+                tree_params.update(
+                    {
+                        "loss": criterion,
+                        "learning_rate": float(learning_rate),
+                        "n_estimators": int(n_estimators),
+                        "subsample": float(subsample),
+                        "max_depth": int(max_depth),
+                        "min_samples_split": int(min_samples_split),
+                        "min_samples_leaf": int(min_samples_leaf),
+                    }
+                )
+            elif model_name == "hist_gradient_boosting":
+                tree_params.update(
+                    {
+                        "learning_rate": float(learning_rate),
+                        "max_iter": int(max_iter),
+                        "max_depth": int(max_depth),
+                        "min_samples_leaf": int(min_samples_leaf),
+                        "max_leaf_nodes": int(max_leaf_nodes),
+                        "l2_regularization": float(l2_regularization),
+                    }
+                )
+            elif model_name == "adaboost":
+                tree_params.update(
+                    {
+                        "n_estimators": int(n_estimators),
+                        "learning_rate": float(learning_rate),
+                    }
+                )
+            elif model_name == "xgboost":
+                tree_params.update(
+                    {
+                        "n_estimators": int(n_estimators),
+                        "learning_rate": float(learning_rate),
+                        "max_depth": int(max_depth),
+                        "subsample": float(subsample),
+                        "colsample_bytree": float(colsample_bytree),
+                        "tree_method": "hist",
+                        "eval_metric": "logloss" if problem_type == "classification" else "rmse",
+                        "verbosity": 0,
+                    }
+                )
+            elif model_name == "lightgbm":
+                tree_params.update(
+                    {
+                        "n_estimators": int(n_estimators),
+                        "learning_rate": float(learning_rate),
+                        "max_depth": int(max_depth),
+                        "subsample": float(subsample),
+                        "colsample_bytree": float(colsample_bytree),
+                        "num_leaves": int(num_leaves),
+                        "reg_lambda": float(l2_regularization),
+                        "verbosity": -1,
+                    }
+                )
+            elif model_name == "catboost":
+                tree_params.update(
+                    {
+                        "iterations": int(n_estimators),
+                        "learning_rate": float(learning_rate),
+                        "depth": int(max_depth),
+                        "random_seed": int(random_state),
+                        "verbose": False,
+                    }
+                )
 
-            with st.spinner("Training the decision tree..."):
-                pipeline, feature_names, class_names = build_training_pipeline(
+            with st.spinner(f"Training the {model_label.lower()}..."):
+                pipeline, feature_names, class_names, target_encoder = build_training_pipeline(
                     X_train,
                     y_train,
                     selected_features,
                     target_col,
                     problem_type,
+                    model_name,
                     tree_params,
                 )
 
             train_predictions = pipeline.predict(X_train)
             test_predictions = pipeline.predict(X_test)
+            train_predictions = decode_predictions(train_predictions, target_encoder)
+            test_predictions = decode_predictions(test_predictions, target_encoder)
             train_metrics = evaluate_predictions(y_train, train_predictions, problem_type)
             test_metrics = evaluate_predictions(y_test, test_predictions, problem_type)
 
@@ -398,6 +642,7 @@ def main() -> None:
                 categorical_columns=detect_column_types(features)[1],
                 numeric_columns=detect_column_types(features)[0],
                 classes_=class_names,
+                target_encoder=target_encoder,
             )
             st.success("Model trained successfully.")
             st.session_state.training_signature = build_signature(
@@ -405,6 +650,7 @@ def main() -> None:
                     "dataset": st.session_state.dataset_signature,
                     "features": selected_features,
                     "target": target_col,
+                    "model": model_name,
                     "params": tree_params,
                     "train_size": train_size,
                 }
@@ -420,45 +666,56 @@ def main() -> None:
         if artifacts.problem_type == "classification":
             render_confusion_matrix(st.session_state.test_metrics)
 
+        render_feature_importance(artifacts.pipeline.named_steps["model"], artifacts.feature_names)
+
         st.markdown("### Tree Visualization")
-        tree_depth = max(1, get_tree_depth(artifacts.pipeline.named_steps["model"]))
-        if tree_depth <= 1:
-            st.caption("The trained tree is shallow, so visualization depth is fixed at 1.")
-            depth_limit = 1
+        tree_depth = get_tree_depth(artifacts.pipeline.named_steps["model"])
+        if tree_depth <= 0:
+            st.info("Tree visualization is not available for this model.")
         else:
-            depth_limit = st.slider(
-                "Visualization depth limit",
-                min_value=1,
-                max_value=tree_depth,
-                value=min(4, tree_depth),
-            )
-        fig = plot_tree_figure(
-            artifacts.pipeline.named_steps["model"],
-            artifacts.feature_names,
-            artifacts.classes_,
-            max_depth=depth_limit,
-        )
-        image_bytes = None
-        try:
-            image_bytes = figure_to_png_bytes(fig)
-        except Exception:
-            image_bytes = None
+            if tree_depth <= 1:
+                st.caption("The trained tree is shallow, so visualization depth is fixed at 1.")
+                depth_limit = 1
+            else:
+                depth_limit = st.slider(
+                    "Visualization depth limit",
+                    min_value=1,
+                    max_value=tree_depth,
+                    value=min(4, tree_depth),
+                )
+            try:
+                fig = plot_tree_figure(
+                    artifacts.pipeline.named_steps["model"],
+                    artifacts.feature_names,
+                    artifacts.classes_,
+                    max_depth=depth_limit,
+                )
+            except ValueError as exc:
+                st.info(str(exc))
+            else:
+                if hasattr(artifacts.pipeline.named_steps["model"], "estimators_"):
+                    st.caption("The visualization shows the first tree in the ensemble.")
+                image_bytes = None
+                try:
+                    image_bytes = figure_to_png_bytes(fig)
+                except Exception:
+                    image_bytes = None
 
-        st.pyplot(fig, clear_figure=False)
+                st.pyplot(fig, clear_figure=False)
 
-        if image_bytes is not None:
-            st.download_button(
-                "Download tree visualization",
-                data=image_bytes,
-                file_name="decision_tree.png",
-                mime="image/png",
-            )
+                if image_bytes is not None:
+                    st.download_button(
+                        "Download tree visualization",
+                        data=image_bytes,
+                        file_name="decision_tree.png",
+                        mime="image/png",
+                    )
 
         render_prediction_form(artifacts, dataset)
 
     st.markdown("### About")
     st.write(
-        "This app uses a scikit-learn Decision Tree pipeline with built-in preprocessing, train/test splitting, evaluation, and per-session prediction support."
+        "This app uses a scikit-learn tree-based pipeline with built-in preprocessing, train/test splitting, evaluation, and per-session prediction support."
     )
 
 

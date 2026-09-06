@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -16,6 +17,18 @@ from sklearn.metrics import (
     precision_score,
     r2_score,
     recall_score,
+)
+from sklearn.ensemble import (
+    AdaBoostClassifier,
+    AdaBoostRegressor,
+    ExtraTreesClassifier,
+    ExtraTreesRegressor,
+    GradientBoostingClassifier,
+    GradientBoostingRegressor,
+    HistGradientBoostingClassifier,
+    HistGradientBoostingRegressor,
+    RandomForestClassifier,
+    RandomForestRegressor,
 )
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
@@ -31,6 +44,7 @@ class ModelArtifacts:
     categorical_columns: list[str]
     numeric_columns: list[str]
     classes_: list[str] | None = None
+    target_encoder: LabelEncoder | None = None
 
 
 def determine_problem_type(y: pd.Series) -> str:
@@ -40,11 +54,90 @@ def determine_problem_type(y: pd.Series) -> str:
     return "classification"
 
 
-def create_model(problem_type: str, params: dict[str, Any]):
-    """Create a decision tree estimator for the detected problem type."""
-    if problem_type == "classification":
-        return DecisionTreeClassifier(**params)
-    return DecisionTreeRegressor(**params)
+def encode_classification_target(y: pd.Series) -> tuple[pd.Series, LabelEncoder]:
+    encoder = LabelEncoder()
+    encoded = pd.Series(encoder.fit_transform(y.astype(str)), index=y.index, name=y.name)
+    return encoded, encoder
+
+
+def decode_predictions(predictions, target_encoder: LabelEncoder | None):
+    if target_encoder is None:
+        return predictions
+    array = np.asarray(predictions)
+    decoded = target_encoder.inverse_transform(array.astype(int))
+    return decoded
+
+
+def supports_optional_booster(model_name: str) -> bool:
+    return model_name in {"xgboost", "lightgbm", "catboost"}
+
+
+def create_model(model_name: str, problem_type: str, params: dict[str, Any]):
+    """Create a tree-based estimator for the detected problem type."""
+    if model_name == "decision_tree":
+        if problem_type == "classification":
+            return DecisionTreeClassifier(**params)
+        return DecisionTreeRegressor(**params)
+
+    if model_name == "random_forest":
+        if problem_type == "classification":
+            return RandomForestClassifier(**params)
+        return RandomForestRegressor(**params)
+
+    if model_name == "extra_trees":
+        if problem_type == "classification":
+            return ExtraTreesClassifier(**params)
+        return ExtraTreesRegressor(**params)
+
+    if model_name == "gradient_boosting":
+        if problem_type == "classification":
+            return GradientBoostingClassifier(**params)
+        return GradientBoostingRegressor(**params)
+
+    if model_name == "hist_gradient_boosting":
+        if problem_type == "classification":
+            return HistGradientBoostingClassifier(**params)
+        return HistGradientBoostingRegressor(**params)
+
+    if model_name == "adaboost":
+        if problem_type == "classification":
+            return AdaBoostClassifier(**params)
+        return AdaBoostRegressor(**params)
+
+    if model_name == "xgboost":
+        try:
+            from xgboost import XGBClassifier, XGBRegressor  # pyright: ignore[reportMissingImports]
+        except Exception as exc:  # pragma: no cover - optional dependency
+            raise ImportError(
+                "XGBoost is not installed. Add xgboost to requirements.txt and reinstall dependencies."
+            ) from exc
+        if problem_type == "classification":
+            return XGBClassifier(**params)
+        return XGBRegressor(**params)
+
+    if model_name == "lightgbm":
+        try:
+            from lightgbm import LGBMClassifier, LGBMRegressor  # pyright: ignore[reportMissingImports]
+        except Exception as exc:  # pragma: no cover - optional dependency
+            raise ImportError(
+                "LightGBM is not installed. Add lightgbm to requirements.txt and reinstall dependencies."
+            ) from exc
+        if problem_type == "classification":
+            return LGBMClassifier(**params)
+        return LGBMRegressor(**params)
+
+    if model_name == "catboost":
+        try:
+            from catboost import CatBoostClassifier, CatBoostRegressor  # pyright: ignore[reportMissingImports]
+        except Exception as exc:  # pragma: no cover - optional dependency
+            raise ImportError(
+                "CatBoost is not installed. Add catboost to requirements.txt and reinstall dependencies."
+            ) from exc
+        if problem_type == "classification":
+            return CatBoostClassifier(**params)
+        return CatBoostRegressor(**params)
+
+    raise ValueError(f"Unsupported model type: {model_name}")
 
 
 def evaluate_predictions(y_true, y_pred, problem_type: str) -> dict[str, Any]:

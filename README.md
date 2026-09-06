@@ -3,7 +3,7 @@
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://decisiontreegenerator.streamlit.app/)
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
 
-An interactive web application for building, visualizing, and analyzing decision trees from uploaded datasets.
+An interactive web application for building, visualizing, and analyzing decision trees, random forests, extra trees, gradient boosting, hist gradient boosting, AdaBoost, XGBoost, LightGBM, and CatBoost from uploaded datasets.
 
 Live demo: https://decisiontreegenerator.streamlit.app/
 
@@ -13,6 +13,7 @@ Live demo: https://decisiontreegenerator.streamlit.app/
 -  📊 Upload CSV/Excel datasets
 -  🔍 Interactive data exploration
 -  🌳 Customizable decision tree parameters
+-  🌲 Multiple tree-based model support
 -  📈 Feature importance visualization
 -  🎯 Automatic problem type detection (classification/regression)
 -  💾 Export decision trees and feature importance
@@ -46,7 +47,7 @@ Live demo: https://decisiontreegenerator.streamlit.app/
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-An interactive Streamlit application for uploading a dataset, profiling the data, training a Decision Tree model, visualizing the tree, evaluating performance, and generating predictions in the browser.
+An interactive Streamlit application for uploading a dataset, profiling the data, training a tree-based model, visualizing the tree when supported, evaluating performance, and generating predictions in the browser.
 
 ## Features
 
@@ -54,9 +55,10 @@ An interactive Streamlit application for uploading a dataset, profiling the data
 - Automatic dataset summary with rows, columns, missing values, duplicates, and preview
 - Target selection and feature selection with automatic numeric/categorical detection
 - Reproducible preprocessing with imputation and one-hot encoding
-- Decision Tree configuration for criterion, depth, split thresholds, leaf size, and class weight
+- Decision Tree, Random Forest, Extra Trees, Gradient Boosting, HistGradientBoosting, and AdaBoost configuration
 - Classification and regression metrics
-- Tree visualization with optional depth limiting and image download
+- Tree visualization with optional depth limiting and image download when supported
+- Feature importance visualization for tree-based models
 - Dynamic prediction form based on the selected features
 
 ## Screenshots
@@ -73,6 +75,9 @@ Add screenshots of the dashboard here after deployment.
 - Matplotlib
 - Seaborn
 - OpenPyXL
+- XGBoost
+- LightGBM
+- CatBoost
 
 ## Architecture Summary
 
@@ -80,7 +85,7 @@ Add screenshots of the dashboard here after deployment.
 - `data_utils.py` handles upload validation, dataset loading, and summary generation.
 - `preprocessing.py` detects column types and builds the preprocessing pipeline.
 - `model_utils.py` creates the model and computes metrics.
-- `tree_utils.py` renders the trained Decision Tree.
+- `tree_utils.py` renders the trained tree-based model when visualization is supported.
 - `config.py` stores environment-driven defaults and UI settings.
 
 ## Installation
@@ -127,14 +132,14 @@ Optional environment variables:
 1. Upload a CSV or Excel dataset.
 2. Review the dataset profile in the explorer section.
 3. Select the target column and feature columns.
-4. Configure the Decision Tree parameters.
+4. Configure the tree-based model parameters.
 5. Train the model.
 6. Review the metrics and visualization.
 7. Use the prediction form to generate outputs for new records.
 
 ## Model Details
 
-The app trains either a `DecisionTreeClassifier` or `DecisionTreeRegressor` depending on the target column. Numeric features are imputed with the median, categorical features are imputed with the most frequent value and one-hot encoded, and the train/test split is reproducible through a configurable random state.
+The app trains a selected tree-based model, including `DecisionTreeClassifier` / `DecisionTreeRegressor`, `RandomForestClassifier` / `RandomForestRegressor`, `ExtraTreesClassifier` / `ExtraTreesRegressor`, `GradientBoostingClassifier` / `GradientBoostingRegressor`, `HistGradientBoostingClassifier` / `HistGradientBoostingRegressor`, `AdaBoostClassifier` / `AdaBoostRegressor`, `XGBClassifier` / `XGBRegressor`, `LGBMClassifier` / `LGBMRegressor`, and `CatBoostClassifier` / `CatBoostRegressor` depending on the chosen model and target column. Numeric features are imputed with the median, categorical features are imputed with the most frequent value and one-hot encoded, and the train/test split is reproducible through a configurable random state.
 
 ## Evaluation Metrics
 
@@ -190,7 +195,6 @@ streamlit run app.py
 ## Future Improvements
 
 - Add exportable model artifacts
-- Add richer feature importance and explainability views
 - Add per-session model persistence
 - Add schema validation and dataset profiling reports
 
