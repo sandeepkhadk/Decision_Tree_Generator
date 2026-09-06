@@ -37,7 +37,7 @@ from model_utils import (
     evaluate_predictions,
 )
 from preprocessing import create_preprocessor, detect_column_types, get_feature_names
-from tree_utils import get_tree_depth, plot_tree_figure
+from tree_utils import figure_to_png_bytes, get_tree_depth, plot_tree_figure
 
 
 logging.basicConfig(level=logging.INFO)
@@ -438,22 +438,18 @@ def main() -> None:
             artifacts.classes_,
             max_depth=depth_limit,
         )
-        st.pyplot(fig, clear_figure=True)
-
-        buffer = None
+        image_bytes = None
         try:
-            from io import BytesIO
-
-            buffer = BytesIO()
-            fig.savefig(buffer, format="png", bbox_inches="tight", dpi=180)
-            buffer.seek(0)
+            image_bytes = figure_to_png_bytes(fig)
         except Exception:
-            buffer = None
+            image_bytes = None
 
-        if buffer is not None:
+        st.pyplot(fig, clear_figure=False)
+
+        if image_bytes is not None:
             st.download_button(
                 "Download tree visualization",
-                data=buffer.getvalue(),
+                data=image_bytes,
                 file_name="decision_tree.png",
                 mime="image/png",
             )
