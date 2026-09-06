@@ -1,144 +1,470 @@
-import streamlit as st
+from __future__ import annotations
+
+import logging
+from typing import Any
+
 import pandas as pd
-from preprocessing import detect_column_types, create_preprocessor, get_feature_names
-from visualization import plot_pairplot, plot_correlation_heatmap
-from model import determine_problem_type, create_model, evaluate_model
-from config import PLOT_CONFIG
+import matplotlib.pyplot as plt
+import streamlit as st
 from sklearn.model_selection import train_test_split
-from sklearn.tree import export_graphviz
 from sklearn.pipeline import Pipeline
-import numpy as np
+from sklearn.metrics import (
+    confusion_matrix,
+    ConfusionMatrixDisplay,
+)
 
-# Main application layout
-def main():
-    st.set_page_config(layout="wide", page_title="Smart Decision Tree Builder")
-    st.title("🌳 Smart Decision Tree Builder with Feature Selector")
+from config import (
+    APP_NAME,
+    APP_TAGLINE,
+    DEFAULT_MAX_DEPTH,
+    DEFAULT_MIN_SAMPLES_LEAF,
+    DEFAULT_MIN_SAMPLES_SPLIT,
+    DEFAULT_RANDOM_STATE,
+    DEFAULT_TEST_SIZE,
+)
+from data_utils import (
+    build_signature,
+    detect_supported_columns,
+    file_hash,
+    load_dataset,
+    summarize_dataset,
+    validate_file_size,
+)
+from model_utils import (
+    ModelArtifacts,
+    create_model,
+    determine_problem_type,
+    evaluate_predictions,
+)
+from preprocessing import create_preprocessor, detect_column_types, get_feature_names
+from tree_utils import get_tree_depth, plot_tree_figure
 
-    # File upload and basic setup
-    uploaded_file = st.file_uploader("📁 Upload your dataset", type=["csv", "xlsx"])
-    if not uploaded_file:
-        return st.info("👋 Please upload a dataset to get started")
 
-    try:
-        # Load data
-        df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-        st.success(f"✅ Dataset loaded: {df.shape[0]} rows × {df.shape[1]} columns")
+logging.basicConfig(level=logging.INFO)
+LOGGER = logging.getLogger(__name__)
 
-        # Select target variable
-        target_col = st.selectbox("🎯 Select target variable", options=df.columns)
-        y = df[target_col]
 
-        # Data preprocessing
-        X = df.drop(columns=[target_col])
-        numeric_cols, categorical_cols = detect_column_types(X)
-        preprocessor = create_preprocessor(numeric_cols, categorical_cols, X)
+st.set_page_config(page_title=APP_NAME, page_icon="🌳", layout="wide")
 
-        # Problem type determination
-        problem_type = determine_problem_type(y)
-        st.info(f"🔮 Detected problem type: {problem_type.capitalize()}")
 
-        # Data exploration section
-        st.subheader("🔍 Data Exploration")
-        with st.expander("Data Preview"):
-            st.dataframe(df.head())
+CSS = """
+<style>
+    .main { background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%); }
+    .block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
+    .hero-card {
+        background: white;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        border-radius: 20px;
+        padding: 1.5rem;
+        box-shadow: 0 20px 50px rgba(15, 23, 42, 0.06);
+    }
+    .metric-card {
+        background: white;
+        border-radius: 16px;
+        padding: 1rem 1.1rem;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
+    }
+    .status-success {
+        background: #ecfdf5;
+        color: #065f46;
+        border: 1px solid #a7f3d0;
+        border-radius: 12px;
+        padding: 0.8rem 1rem;
+    }
+    .status-error {
+        background: #fef2f2;
+        color: #991b1b;
+        border: 1px solid #fecaca;
+        border-radius: 12px;
+        padding: 0.8rem 1rem;
+    }
+</style>
+"""
 
-            tab1, tab2, tab3 = st.tabs(["Statistics", "Missing Values", "Visualizations"])
 
-            with tab1:
-                st.write(df.describe(include='all'))
+@st.cache_data(show_spinner=False)
+def cached_dataset(file_bytes: bytes, filename: str) -> pd.DataFrame:
+    return load_dataset(file_bytes, filename)
 
-            with tab2:
-                st.write(df.isnull().sum())
 
-            with tab3:
-                viz_type = st.radio("Visualization Type:", ["Pair Plot", "Correlation", "Target Relationship"])
+def init_state() -> None:
+    defaults = {
+        "dataset": None,
+        "dataset_name": None,
+        "dataset_signature": None,
+        "summary": None,
+        "artifacts": None,
+        "metrics": None,
+        "train_metrics": None,
+        "test_metrics": None,
+        "prediction": None,
+    }
+    for key, value in defaults.items():
+        st.session_state.setdefault(key, value)
 
-                if viz_type == "Pair Plot":
-                    sample_size = st.slider("Sample size", 50, len(df), PLOT_CONFIG['pairplot_sample_size'])
-                    cols_to_plot = st.multiselect("Select columns", numeric_cols + categorical_cols, default=numeric_cols[:3] if numeric_cols else [])
-                    if cols_to_plot:
-                        fig = plot_pairplot(df, cols_to_plot, target_col, sample_size)
-                        st.pyplot(fig)
 
-                elif viz_type == "Correlation" and numeric_cols:
-                    fig = plot_correlation_heatmap(df, numeric_cols + [target_col])
-                    st.pyplot(fig)
+def render_header() -> None:
+    st.markdown(CSS, unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="hero-card">
+            <h1 style="margin:0;font-size:2.2rem;">{APP_NAME}</h1>
+            <p style="margin:0.4rem 0 0;color:#475569;font-size:1.02rem;">{APP_TAGLINE}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-                elif viz_type == "Target Relationship":
-                    col = st.selectbox("Select feature", numeric_cols + categorical_cols)
-                    if col:
-                        st.scatter_chart(df[[col, target_col]])
 
-        # Feature selection
-        st.subheader("🧐 Feature Selection")
-        cols_to_include = st.multiselect("Select features to include:", options=numeric_cols + categorical_cols, default=numeric_cols + categorical_cols)
+def render_dataset_overview(summary: dict[str, Any]) -> None:
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Rows", summary["rows"])
+    col2.metric("Columns", summary["columns"])
+    col3.metric("Duplicates", summary["duplicate_rows"])
+    col4.metric("Missing cells", int(summary["missing_values"].sum()))
 
-        if not cols_to_include:
-            st.warning("Please select at least one feature")
-            st.stop()
 
-        # Update features
-        X = X[cols_to_include]
-        numeric_cols = [col for col in numeric_cols if col in cols_to_include]
-        categorical_cols = [col for col in categorical_cols if col in cols_to_include]
-
-        # Update the preprocessor after feature selection
-        preprocessor = create_preprocessor(numeric_cols, categorical_cols, X)
-
-        # Parameters for model creation
-        test_size = st.slider("Test Size (%)", 10, 50, 20) / 100
-        max_depth = st.slider("Max Depth", 1, 20, 5)
-        min_samples_split = st.slider("Min Samples Split", 2, 20, 2)
-        min_samples_leaf = st.slider("Min Samples Leaf", 1, 20, 1)
-
-        # Train-test split
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
-
-        # Create the model
-        model_params = {
-            'max_depth': max_depth,
-            'min_samples_split': min_samples_split,
-            'min_samples_leaf': min_samples_leaf,
-            'random_state': 42
-        }
-
-        # Create and fit pipeline
-        pipeline = Pipeline([
-            ('preprocessor', preprocessor),
-            ('model', create_model(problem_type, model_params))
-        ])
-        pipeline.fit(X_train, y_train)
-
-        # Get feature names after preprocessing
-        if hasattr(pipeline.named_steps['preprocessor'], 'get_feature_names_out'):
-            feature_names = pipeline.named_steps['preprocessor'].get_feature_names_out()
-        else:
-            feature_names = get_feature_names(preprocessor)  # Fallback if not using ColumnTransformer
-
-        # Model evaluation
-        st.subheader("📊 Model Performance")
-        train_metrics = evaluate_model(pipeline, X_train, y_train, problem_type)
-        test_metrics = evaluate_model(pipeline, X_test, y_test, problem_type)
-
-        # Visualization
-        st.subheader("🌲 Decision Tree Visualization")
-        model = pipeline.named_steps['model']  # Extract the model from the pipeline
-        if problem_type == "classification":
-            class_names = [str(cls) for cls in y.unique()]
-        else:
-            class_names = None
-
-        dot_data = export_graphviz(
-            model,
-            feature_names=feature_names,
-            class_names=class_names,
-            filled=True,
-            rounded=True
+def render_summary_tables(summary: dict[str, Any]) -> None:
+    tabs = st.tabs(["Preview", "Columns", "Missing Values", "Statistics"])
+    with tabs[0]:
+        st.dataframe(summary["preview"], use_container_width=True)
+    with tabs[1]:
+        st.dataframe(
+            pd.DataFrame(
+                {
+                    "Column": summary["column_names"],
+                    "Data type": [summary["dtypes"][name] for name in summary["column_names"]],
+                }
+            ),
+            use_container_width=True,
         )
-        st.graphviz_chart(dot_data)
+    with tabs[2]:
+        st.dataframe(summary["missing_values"].reset_index(), use_container_width=True)
+    with tabs[3]:
+        if summary["numeric_summary"].empty:
+            st.info("No numeric columns were detected for descriptive statistics.")
+        else:
+            st.dataframe(summary["numeric_summary"], use_container_width=True)
 
-    except Exception as e:
-        st.error(f"❌ Error: {str(e)}")
+
+def build_training_pipeline(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    feature_columns: list[str],
+    target_name: str,
+    problem_type: str,
+    tree_params: dict[str, Any],
+) -> tuple[Pipeline, list[str], list[str] | None]:
+    numeric_cols, categorical_cols = detect_column_types(X_train)
+    preprocessor = create_preprocessor(numeric_cols, categorical_cols, X_train)
+    estimator = create_model(problem_type, tree_params)
+    pipeline = Pipeline([
+        ("preprocessor", preprocessor),
+        ("model", estimator),
+    ])
+    pipeline.fit(X_train, y_train)
+
+    fitted_preprocessor = pipeline.named_steps["preprocessor"]
+    feature_names = get_feature_names(fitted_preprocessor)
+    class_names = [str(value) for value in pipeline.named_steps["model"].classes_] if problem_type == "classification" else None
+
+    artifacts = ModelArtifacts(
+        pipeline=pipeline,
+        preprocessor=fitted_preprocessor,
+        feature_names=feature_names,
+        problem_type=problem_type,
+        target_name=target_name,
+        feature_columns=feature_columns,
+        categorical_columns=categorical_cols,
+        numeric_columns=numeric_cols,
+        classes_=class_names,
+    )
+    st.session_state.artifacts = artifacts
+    return pipeline, feature_names, class_names
+
+
+def render_prediction_form(artifacts: ModelArtifacts, dataset: pd.DataFrame) -> None:
+    st.subheader("Prediction")
+    if artifacts is None:
+        st.info("Train a model to enable predictions.")
+        return
+
+    with st.form("prediction_form"):
+        inputs: dict[str, Any] = {}
+        for column in artifacts.feature_columns:
+            series = dataset[column]
+            if pd.api.types.is_numeric_dtype(series):
+                min_value = float(series.min()) if series.notna().any() else 0.0
+                max_value = float(series.max()) if series.notna().any() else 1.0
+                default_value = float(series.dropna().median()) if series.notna().any() else 0.0
+                inputs[column] = st.number_input(column, value=default_value, min_value=min_value, max_value=max_value)
+            else:
+                options = [str(value) for value in series.dropna().astype(str).unique().tolist()[:200]]
+                options = options or [""]
+                inputs[column] = st.selectbox(column, options=options)
+
+        submitted = st.form_submit_button("Generate Prediction")
+
+    if not submitted:
+        return
+
+    input_frame = pd.DataFrame([inputs])
+    prediction = artifacts.pipeline.predict(input_frame)[0]
+    st.session_state.prediction = prediction
+
+    st.markdown(
+        f"<div class='metric-card'><h3 style='margin:0;'>Prediction</h3><p style='font-size:1.35rem;margin:0.35rem 0 0;'><strong>{prediction}</strong></p></div>",
+        unsafe_allow_html=True,
+    )
+
+    if artifacts.problem_type == "classification" and hasattr(artifacts.pipeline.named_steps["model"], "predict_proba"):
+        probabilities = artifacts.pipeline.predict_proba(input_frame)[0]
+        proba_frame = pd.DataFrame({"Class": artifacts.pipeline.named_steps["model"].classes_, "Probability": probabilities})
+        st.dataframe(proba_frame, use_container_width=True)
+
+
+def render_evaluation(metrics: dict[str, Any], problem_type: str) -> None:
+    st.subheader("Model Evaluation")
+    if problem_type == "classification":
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Accuracy", f"{metrics['Accuracy']:.3f}")
+        col2.metric("Precision", f"{metrics['Precision']:.3f}")
+        col3.metric("Recall", f"{metrics['Recall']:.3f}")
+        col4.metric("F1-score", f"{metrics['F1 Score']:.3f}")
+        st.dataframe(pd.DataFrame(metrics["Classification Report"]).transpose(), use_container_width=True)
+    else:
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("MAE", f"{metrics['MAE']:.3f}")
+        col2.metric("MSE", f"{metrics['MSE']:.3f}")
+        col3.metric("RMSE", f"{metrics['RMSE']:.3f}")
+        col4.metric("R²", f"{metrics['R2']:.3f}")
+
+
+def render_confusion_matrix(metrics: dict[str, Any]) -> None:
+    if "Confusion Matrix" not in metrics:
+        return
+
+    labels = metrics.get("Labels", [])
+    matrix = metrics["Confusion Matrix"]
+    figure, axis = plt.subplots(figsize=(8, 6))
+    display = ConfusionMatrixDisplay(confusion_matrix=matrix, display_labels=labels)
+    display.plot(ax=axis, cmap="Blues", colorbar=False)
+    axis.set_title("Confusion Matrix")
+    st.pyplot(figure, clear_figure=True)
+
+
+def main() -> None:
+    init_state()
+    render_header()
+
+    with st.sidebar:
+        st.header("Controls")
+        uploaded_file = st.file_uploader("Upload CSV or Excel dataset", type=["csv", "xlsx", "xls"])
+        st.caption("Files are validated locally and never executed.")
+
+    if uploaded_file is not None:
+        try:
+            validate_file_size(getattr(uploaded_file, "size", None))
+            file_bytes = uploaded_file.getvalue()
+            dataset_signature = file_hash(file_bytes)
+            if dataset_signature != st.session_state.dataset_signature:
+                dataset = cached_dataset(file_bytes, uploaded_file.name)
+                if dataset.empty:
+                    raise ValueError("The uploaded dataset is empty. Please provide a file with at least one row.")
+                st.session_state.dataset = dataset
+                st.session_state.dataset_name = uploaded_file.name
+                st.session_state.dataset_signature = dataset_signature
+                st.session_state.summary = summarize_dataset(dataset, uploaded_file.name)
+                st.session_state.artifacts = None
+                st.session_state.metrics = None
+                st.session_state.prediction = None
+        except Exception as exc:
+            LOGGER.exception("Dataset upload failed")
+            st.error(str(exc))
+            return
+
+    dataset = st.session_state.dataset
+    if dataset is None:
+        st.info("Upload a dataset to begin.")
+        st.stop()
+
+    summary = st.session_state.summary
+    render_dataset_overview(summary)
+
+    st.markdown("### Dataset Explorer")
+    render_summary_tables(summary)
+
+    numeric_cols, categorical_cols, unsupported_cols = detect_supported_columns(dataset)
+    if unsupported_cols:
+        st.warning(f"Unsupported columns were detected and will be ignored automatically: {', '.join(unsupported_cols)}")
+
+    st.markdown("### Preprocessing and Model Setup")
+    target_col = st.selectbox("Target column", options=list(dataset.columns), index=len(dataset.columns) - 1)
+    feature_candidates = [column for column in dataset.columns if column != target_col and column not in unsupported_cols]
+    selected_features = st.multiselect(
+        "Feature columns",
+        options=feature_candidates,
+        default=feature_candidates,
+    )
+    if not selected_features:
+        st.warning("Select at least one feature column.")
+        st.stop()
+
+    train_size = 1 - st.slider("Test split", min_value=0.1, max_value=0.5, value=float(DEFAULT_TEST_SIZE), step=0.05)
+    random_state = st.number_input("Random state", value=int(DEFAULT_RANDOM_STATE), step=1)
+
+    problem_type = determine_problem_type(dataset[target_col])
+
+    st.markdown("#### Decision Tree Configuration")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        criterion_options = ["squared_error", "friedman_mse", "absolute_error", "poisson"] if problem_type == "regression" else ["gini", "entropy", "log_loss"]
+        criterion = st.selectbox("Criterion", options=criterion_options)
+    with col2:
+        max_depth = st.number_input("Max depth", min_value=1, max_value=100, value=int(DEFAULT_MAX_DEPTH), step=1)
+    with col3:
+        min_samples_split = st.number_input("Min samples split", min_value=2, max_value=100, value=int(DEFAULT_MIN_SAMPLES_SPLIT), step=1)
+    with col4:
+        min_samples_leaf = st.number_input("Min samples leaf", min_value=1, max_value=100, value=int(DEFAULT_MIN_SAMPLES_LEAF), step=1)
+
+    class_weight = None
+    if pd.api.types.is_object_dtype(dataset[target_col]) or pd.api.types.is_categorical_dtype(dataset[target_col]):
+        class_weight = st.selectbox("Class weight", options=[None, "balanced"], format_func=lambda value: "None" if value is None else value)
+
+    train_trigger = st.button("Train Model", type="primary")
+
+    if train_trigger:
+        try:
+            features = dataset[selected_features].copy()
+            target = dataset[target_col].copy()
+            if features.empty:
+                raise ValueError("No usable feature columns were selected.")
+            if target.isna().all():
+                raise ValueError("The target column contains only missing values.")
+
+            stratify = target if problem_type == "classification" and target.nunique(dropna=True) > 1 else None
+            effective_test_size = 1 - train_size
+            if stratify is not None:
+                minimum_test_size = target.nunique(dropna=True) / len(target)
+                if effective_test_size < minimum_test_size:
+                    effective_test_size = minimum_test_size
+                    st.info(
+                        "The selected test split was too small for stratified classification, so it was increased automatically."
+                    )
+            X_train, X_test, y_train, y_test = train_test_split(
+                features,
+                target,
+                test_size=effective_test_size,
+                random_state=int(random_state),
+                stratify=stratify,
+            )
+
+            tree_params: dict[str, Any] = {
+                "criterion": criterion,
+                "max_depth": int(max_depth),
+                "min_samples_split": int(min_samples_split),
+                "min_samples_leaf": int(min_samples_leaf),
+                "random_state": int(random_state),
+            }
+            if class_weight is not None and problem_type == "classification":
+                tree_params["class_weight"] = class_weight
+
+            with st.spinner("Training the decision tree..."):
+                pipeline, feature_names, class_names = build_training_pipeline(
+                    X_train,
+                    y_train,
+                    selected_features,
+                    target_col,
+                    problem_type,
+                    tree_params,
+                )
+
+            train_predictions = pipeline.predict(X_train)
+            test_predictions = pipeline.predict(X_test)
+            train_metrics = evaluate_predictions(y_train, train_predictions, problem_type)
+            test_metrics = evaluate_predictions(y_test, test_predictions, problem_type)
+
+            st.session_state.metrics = {"train": train_metrics, "test": test_metrics}
+            st.session_state.train_metrics = train_metrics
+            st.session_state.test_metrics = test_metrics
+            st.session_state.artifacts = ModelArtifacts(
+                pipeline=pipeline,
+                preprocessor=pipeline.named_steps["preprocessor"],
+                feature_names=feature_names,
+                problem_type=problem_type,
+                target_name=target_col,
+                feature_columns=selected_features,
+                categorical_columns=detect_column_types(features)[1],
+                numeric_columns=detect_column_types(features)[0],
+                classes_=class_names,
+            )
+            st.success("Model trained successfully.")
+            st.session_state.training_signature = build_signature(
+                {
+                    "dataset": st.session_state.dataset_signature,
+                    "features": selected_features,
+                    "target": target_col,
+                    "params": tree_params,
+                    "train_size": train_size,
+                }
+            )
+        except Exception as exc:
+            LOGGER.exception("Model training failed")
+            st.error(str(exc))
+            return
+
+    artifacts = st.session_state.artifacts
+    if artifacts is not None and st.session_state.metrics is not None:
+        render_evaluation(st.session_state.test_metrics, artifacts.problem_type)
+        if artifacts.problem_type == "classification":
+            render_confusion_matrix(st.session_state.test_metrics)
+
+        st.markdown("### Tree Visualization")
+        tree_depth = max(1, get_tree_depth(artifacts.pipeline.named_steps["model"]))
+        if tree_depth <= 1:
+            st.caption("The trained tree is shallow, so visualization depth is fixed at 1.")
+            depth_limit = 1
+        else:
+            depth_limit = st.slider(
+                "Visualization depth limit",
+                min_value=1,
+                max_value=tree_depth,
+                value=min(4, tree_depth),
+            )
+        fig = plot_tree_figure(
+            artifacts.pipeline.named_steps["model"],
+            artifacts.feature_names,
+            artifacts.classes_,
+            max_depth=depth_limit,
+        )
+        st.pyplot(fig, clear_figure=True)
+
+        buffer = None
+        try:
+            from io import BytesIO
+
+            buffer = BytesIO()
+            fig.savefig(buffer, format="png", bbox_inches="tight", dpi=180)
+            buffer.seek(0)
+        except Exception:
+            buffer = None
+
+        if buffer is not None:
+            st.download_button(
+                "Download tree visualization",
+                data=buffer.getvalue(),
+                file_name="decision_tree.png",
+                mime="image/png",
+            )
+
+        render_prediction_form(artifacts, dataset)
+
+    st.markdown("### About")
+    st.write(
+        "This app uses a scikit-learn Decision Tree pipeline with built-in preprocessing, train/test splitting, evaluation, and per-session prediction support."
+    )
+
 
 if __name__ == "__main__":
     main()

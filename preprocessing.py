@@ -16,17 +16,20 @@ def detect_column_types(X):
 def create_preprocessor(numeric_cols, categorical_cols, X):
     """Create preprocessing pipeline"""
     numeric_transformer = Pipeline(steps=[
-        ('imputer', SimpleImputer(strategy='median')) if X[numeric_cols].isnull().any().any()
-        else ('passthrough', 'passthrough')
-    ])
+        ('imputer', SimpleImputer(strategy='median'))
+    ]) if numeric_cols else 'passthrough'
 
-    categorical_steps = []
+    categorical_transformer = 'passthrough'
     if categorical_cols:
-        if X[categorical_cols].isnull().any().any():
-            categorical_steps.append(('imputer', SimpleImputer(strategy='most_frequent')))
-        categorical_steps.append(('onehot', OneHotEncoder(handle_unknown='ignore', sparse=False)))
+        try:
+            encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
+        except TypeError:
+            encoder = OneHotEncoder(handle_unknown='ignore', sparse=False)
 
-    categorical_transformer = Pipeline(steps=categorical_steps) if categorical_cols else ('passthrough', 'passthrough')
+        categorical_transformer = Pipeline(steps=[
+            ('imputer', SimpleImputer(strategy='most_frequent')),
+            ('onehot', encoder)
+        ])
 
     return ColumnTransformer(
         transformers=[
@@ -37,21 +40,27 @@ def create_preprocessor(numeric_cols, categorical_cols, X):
 
 def get_feature_names(preprocessor):
     """Get feature names after preprocessing"""
+    if hasattr(preprocessor, "get_feature_names_out"):
+        try:
+            return list(preprocessor.get_feature_names_out())
+        except Exception:
+            pass
+
     feature_names = []
 
-    # Iterate through the transformers in the ColumnTransformer
     for name, transformer, columns in preprocessor.transformers:
         if transformer == 'passthrough':
-            # If the transformer is passthrough, just add the original column names
             feature_names.extend(columns)
         else:
-            # If the transformer is a Pipeline or an estimator, we need to extract feature names
             if hasattr(transformer, 'get_feature_names_out'):
-                # For transformers that have get_feature_names_out method (like OneHotEncoder)
-                transformed_feature_names = transformer.get_feature_names_out(input_features=columns)
-                feature_names.extend(transformed_feature_names)
+                feature_names.extend(transformer.get_feature_names_out(input_features=columns))
+            elif hasattr(transformer, 'named_steps') and 'onehot' in transformer.named_steps:
+                onehot = transformer.named_steps['onehot']
+                if hasattr(onehot, 'get_feature_names_out'):
+                    feature_names.extend(onehot.get_feature_names_out(input_features=columns))
+                else:
+                    feature_names.extend(columns)
             else:
-                # If the transformer does not have this method, we can only add the original column names
                 feature_names.extend(columns)
 
-        return feature_names
+    return feature_names
