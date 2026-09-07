@@ -58,6 +58,7 @@ An interactive Streamlit application for uploading a dataset, profiling the data
 - Target selection and feature selection with automatic numeric/categorical detection
 - Automatic preprocessing for missing values and categorical features before model training
 - Reproducible preprocessing with imputation and one-hot encoding
+- Downloadable dataset profiling reports and trained model bundles
 - Decision Tree, Random Forest, Extra Trees, Gradient Boosting, HistGradientBoosting, and AdaBoost configuration
 - Classification and regression metrics
 - Tree visualization with optional depth limiting and image download when supported
@@ -205,12 +206,6 @@ For a local smoke test before deployment:
 ```bash
 streamlit run app.py
 ```
-
-## Future Improvements
-
-- Add exportable model artifacts
-- Add per-session model persistence
-- Add schema validation and dataset profiling reports
 
 
 

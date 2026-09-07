@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
+import pickle
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -209,6 +212,52 @@ def cached_dataset(file_bytes: bytes, filename: str) -> pd.DataFrame:
     return load_dataset(file_bytes, filename)
 
 
+def build_dataset_profile_report(
+    summary: dict[str, Any],
+    dataset_name: str,
+    unsupported_cols: list[str] | None = None,
+    target_col: str | None = None,
+    selected_features: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "report_type": "dataset_profile",
+        "dataset_name": dataset_name,
+        "target_column": target_col,
+        "selected_features": selected_features or [],
+        "unsupported_columns": unsupported_cols or [],
+        "rows": int(summary["rows"]),
+        "columns": int(summary["columns"]),
+        "duplicate_rows": int(summary["duplicate_rows"]),
+        "missing_cells": int(summary["missing_values"].sum()),
+        "column_names": list(summary["column_names"]),
+        "dtypes": dict(summary["dtypes"]),
+        "missing_values": summary["missing_values"].to_dict(),
+        "numeric_summary": summary["numeric_summary"].reset_index().to_dict(orient="records"),
+        "preview": summary["preview"].to_dict(orient="records"),
+    }
+
+
+def build_model_bundle(
+    artifacts: ModelArtifacts,
+    model_name: str,
+    dataset_name: str,
+    train_meta: dict[str, Any] | None = None,
+) -> bytes:
+    payload = {
+        "bundle_version": 1,
+        "created_at": pd.Timestamp.utcnow().isoformat(),
+        "dataset_name": dataset_name,
+        "model_name": model_name,
+        "train_meta": train_meta or {},
+        "artifacts": artifacts,
+    }
+    return pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def build_json_download(payload: dict[str, Any]) -> bytes:
+    return json.dumps(payload, indent=2, ensure_ascii=False, default=str).encode("utf-8")
+
+
 def init_state() -> None:
     defaults = {
         "dataset": None,
@@ -306,6 +355,57 @@ def render_dataset_overview(summary: dict[str, Any]) -> None:
     col4.metric("Missing cells", int(summary["missing_values"].sum()))
 
 
+def render_dataset_downloads(summary: dict[str, Any], dataset_name: str, unsupported_cols: list[str] | None = None) -> None:
+    report = build_dataset_profile_report(summary, dataset_name, unsupported_cols=unsupported_cols)
+    report_bytes = build_json_download(report)
+
+    st.download_button(
+        "Download dataset profile report",
+        data=report_bytes,
+        file_name=f"{Path(dataset_name).stem}_profile_report.json",
+        mime="application/json",
+        use_container_width=True,
+        key=f"download_profile_{file_name_safe(dataset_name)}",
+    )
+
+
+def file_name_safe(name: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in Path(name).stem) or "dataset"
+
+
+def render_model_downloads(
+    artifacts: ModelArtifacts,
+    model_name: str,
+    dataset_name: str,
+    train_meta: dict[str, Any],
+) -> None:
+    bundle_bytes = build_model_bundle(artifacts, model_name, dataset_name, train_meta)
+    export_name = f"{file_name_safe(dataset_name)}_{model_name}_bundle.pkl"
+    st.download_button(
+        "Download trained model bundle",
+        data=bundle_bytes,
+        file_name=export_name,
+        mime="application/octet-stream",
+        use_container_width=True,
+        key=f"download_bundle_{model_name}",
+    )
+
+    profile_payload = build_dataset_profile_report(
+        st.session_state.summary,
+        dataset_name,
+        target_col=artifacts.target_name,
+        selected_features=artifacts.feature_columns,
+    )
+    st.download_button(
+        "Download training profile report",
+        data=build_json_download(profile_payload),
+        file_name=f"{file_name_safe(dataset_name)}_{model_name}_training_report.json",
+        mime="application/json",
+        use_container_width=True,
+        key=f"download_training_report_{model_name}",
+    )
+
+
 def render_summary_tables(summary: dict[str, Any]) -> None:
     tabs = st.tabs(["Preview", "Columns", "Missing Values", "Statistics"])
     with tabs[0]:
@@ -375,6 +475,7 @@ def render_dataset_page() -> None:
     summary = st.session_state.summary
     st.markdown("### Dataset Overview")
     render_dataset_overview(summary)
+    render_dataset_downloads(summary, st.session_state.dataset_name or "dataset")
     st.markdown("### Dataset Explorer")
     render_summary_tables(summary)
 
@@ -1046,6 +1147,7 @@ def render_model_page(model_name: str) -> None:
         train_meta.get("tree_params", {}),
         train_meta.get("n_samples", len(dataset)),
     )
+    render_model_downloads(artifacts, model_name, st.session_state.dataset_name or "dataset", train_meta)
     render_evaluation(st.session_state.test_metrics, artifacts.problem_type)
     if artifacts.problem_type == "classification":
         render_confusion_matrix(st.session_state.test_metrics)
