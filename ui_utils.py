@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from sklearn.metrics import precision_recall_curve
 from sklearn.model_selection import train_test_split
 
 from config import (
@@ -23,6 +24,7 @@ from data_utils import (
     build_signature,
     file_hash,
     load_dataset,
+    summarize_class_distribution,
     summarize_dataset,
     validate_file_size,
 )
@@ -33,6 +35,9 @@ from model_utils import (
     evaluate_predictions,
     get_estimator_count,
     get_model_meta,
+    IMBLEARN_AVAILABLE,
+    predict_classes_from_proba,
+    supports_class_weight,
 )
 from preprocessing import detect_column_types
 from report_utils import (
@@ -77,6 +82,9 @@ def init_state() -> None:
         "nav_page": "dashboard",
         "trained_model_name": None,
         "last_train_meta": None,
+        "target_distribution": None,
+        "classification_eval": None,
+        "decision_threshold": 0.5,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -120,6 +128,37 @@ def render_dataset_overview(summary: dict[str, Any]) -> None:
     col4.metric("Missing cells", int(summary["missing_values"].sum()))
 
 
+def render_target_distribution(target_distribution: dict[str, Any]) -> None:
+    if not target_distribution:
+        return
+
+    st.markdown("#### Target Class Distribution")
+    distribution = pd.DataFrame(target_distribution.get("distribution", []))
+    if distribution.empty:
+        st.info("No target distribution is available for the selected target column.")
+        return
+
+    metric_columns = st.columns(4)
+    metric_columns[0].metric("Minority share", f"{target_distribution.get('minority_share', 0.0):.1f}%")
+    metric_columns[1].metric("Majority share", f"{target_distribution.get('majority_share', 0.0):.1f}%")
+    metric_columns[2].metric("Imbalance ratio", target_distribution.get("imbalance_ratio", "-"))
+    metric_columns[3].metric("Flagged", "Yes" if target_distribution.get("is_imbalanced") else "No")
+
+    if target_distribution.get("is_imbalanced"):
+        st.warning("The target is imbalanced. Consider class weights, resampling, or threshold tuning before training.")
+
+    st.dataframe(distribution, use_container_width=True)
+
+
+def resampling_option_labels() -> dict[str, str]:
+    return {
+        "none": "None",
+        "random_oversample": "Random oversampling",
+        "random_undersample": "Random undersampling",
+        "smote": "SMOTE (imbalanced-learn)",
+    }
+
+
 def render_dataset_downloads(summary: dict[str, Any], dataset_name: str, unsupported_cols: list[str] | None = None) -> None:
     report = build_dataset_profile_report(summary, dataset_name, unsupported_cols=unsupported_cols)
     st.download_button(
@@ -152,6 +191,7 @@ def render_model_downloads(
         dataset_name,
         target_col=artifacts.target_name,
         selected_features=artifacts.feature_columns,
+        target_distribution=st.session_state.get("target_distribution"),
     )
     st.download_button(
         "Download training profile report",
@@ -333,8 +373,14 @@ def render_prediction_form(artifacts: ModelArtifacts, dataset: pd.DataFrame) -> 
         return
 
     input_frame = pd.DataFrame([inputs])
-    prediction = artifacts.pipeline.predict(input_frame)[0]
-    prediction = decode_predictions([prediction], artifacts.target_encoder)[0]
+    if artifacts.problem_type == "classification" and hasattr(artifacts.pipeline.named_steps["model"], "predict_proba"):
+        probabilities = artifacts.pipeline.predict_proba(input_frame)[0]
+        threshold = float(st.session_state.get("decision_threshold", 0.5))
+        prediction_index = predict_classes_from_proba([probabilities], threshold=threshold)[0]
+        prediction = decode_predictions([prediction_index], artifacts.target_encoder)[0]
+    else:
+        prediction = artifacts.pipeline.predict(input_frame)[0]
+        prediction = decode_predictions([prediction], artifacts.target_encoder)[0]
     st.session_state.prediction = prediction
 
     st.markdown(
@@ -354,9 +400,18 @@ def render_evaluation(metrics: dict[str, Any], problem_type: str) -> None:
     if problem_type == "classification":
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Accuracy", f"{metrics['Accuracy']:.3f}")
-        col2.metric("Precision", f"{metrics['Precision']:.3f}")
-        col3.metric("Recall", f"{metrics['Recall']:.3f}")
-        col4.metric("F1-score", f"{metrics['F1 Score']:.3f}")
+        col2.metric("Weighted F1", f"{metrics['F1 Score']:.3f}")
+        col3.metric("Macro F1", f"{metrics.get('Macro F1', 0.0):.3f}")
+        col4.metric("ROC-AUC", "-" if metrics.get("ROC AUC") is None else f"{metrics['ROC AUC']:.3f}")
+
+        secondary = st.columns(3)
+        secondary[0].metric("Weighted precision", f"{metrics['Precision']:.3f}")
+        secondary[1].metric("Weighted recall", f"{metrics['Recall']:.3f}")
+        secondary[2].metric("PR-AUC", "-" if metrics.get("PR AUC") is None else f"{metrics['PR AUC']:.3f}")
+
+        for warning in metrics.get("Warnings", []):
+            st.warning(warning)
+
         st.dataframe(pd.DataFrame(metrics["Classification Report"]).transpose(), use_container_width=True)
     else:
         col1, col2, col3, col4 = st.columns(4)
@@ -364,6 +419,20 @@ def render_evaluation(metrics: dict[str, Any], problem_type: str) -> None:
         col2.metric("MSE", f"{metrics['MSE']:.3f}")
         col3.metric("RMSE", f"{metrics['RMSE']:.3f}")
         col4.metric("R²", f"{metrics['R2']:.3f}")
+
+
+def render_precision_recall_curve(y_true: pd.Series, y_proba) -> None:
+    if y_proba is None:
+        return
+
+    probabilities = pd.DataFrame(y_proba)
+    if probabilities.shape[1] != 2:
+        return
+
+    precision, recall, _ = precision_recall_curve(y_true, probabilities.iloc[:, 1])
+    curve_frame = pd.DataFrame({"Recall": recall[:-1], "Precision": precision[:-1]}).set_index("Recall")
+    st.markdown("### Precision-Recall Curve")
+    st.line_chart(curve_frame)
 
 
 def render_confusion_matrix(metrics: dict[str, Any]) -> None:
@@ -427,8 +496,20 @@ def render_model_config(model_name: str, problem_type: str, dataset: pd.DataFram
         "max_bin": None,
         "num_leaves": None,
         "class_weight": None,
+        "use_class_weight": False,
+        "resampling_strategy": "none",
     }
     key_prefix = model_name
+
+    if problem_type == "classification":
+        with st.expander("Imbalance handling tips", expanded=False):
+            st.markdown(
+                """
+- Use **balanced class weights** first when the minority class is under-represented but still has enough examples.
+- Try **resampling** when the class gap is large or the model keeps predicting the majority class.
+- Adjust the **decision threshold** after training if recall and precision need to be traded off for the positive class.
+                """.strip()
+            )
 
     if model_name in {"decision_tree", "random_forest", "extra_trees"}:
         col1, col2, col3, col4 = st.columns(4)
@@ -445,13 +526,22 @@ def render_model_config(model_name: str, problem_type: str, dataset: pd.DataFram
         if model_name in {"random_forest", "extra_trees"}:
             values["n_estimators"] = st.number_input("Number of trees", min_value=10, max_value=500, value=100, step=10, key=f"ntrees_{key_prefix}")
 
-        if pd.api.types.is_object_dtype(dataset[target_col]) or pd.api.types.is_categorical_dtype(dataset[target_col]):
-            values["class_weight"] = st.selectbox(
-                "Class weight",
-                options=[None, "balanced"],
-                format_func=lambda value: "None" if value is None else value,
-                key=f"classweight_{key_prefix}",
+        if problem_type == "classification" and supports_class_weight(model_name):
+            values["use_class_weight"] = st.checkbox(
+                "Use balanced class weights",
+                value=True,
+                key=f"balanced_class_weight_{key_prefix}",
             )
+
+        if problem_type == "classification":
+            values["resampling_strategy"] = st.selectbox(
+                "Optional resampling",
+                options=["none", "random_oversample", "random_undersample", "smote"],
+                format_func=lambda value: resampling_option_labels()[value],
+                key=f"resample_{key_prefix}",
+            )
+            if values["resampling_strategy"] == "smote" and not IMBLEARN_AVAILABLE:
+                st.warning("SMOTE is unavailable in this environment because imbalanced-learn is not installed.")
 
     elif model_name == "gradient_boosting":
         st.caption("Gradient Boosting uses shallow decision trees as weak learners.")
@@ -545,8 +635,8 @@ def build_tree_params(model_name: str, problem_type: str, random_state: int, val
         )
         if values["n_estimators"] is not None:
             tree_params["n_estimators"] = int(values["n_estimators"])
-        if values["class_weight"] is not None and problem_type == "classification":
-            tree_params["class_weight"] = values["class_weight"]
+        if problem_type == "classification" and values.get("use_class_weight"):
+            tree_params["class_weight"] = "balanced"
     elif model_name == "gradient_boosting":
         tree_params.update(
             {
@@ -849,6 +939,12 @@ def render_model_page(
 
     problem_type = determine_problem_type(dataset[target_col])
 
+    target_distribution = summarize_class_distribution(dataset[target_col]) if problem_type == "classification" else None
+    st.session_state.target_distribution = target_distribution
+    if target_distribution is not None:
+        with st.container(border=True):
+            render_target_distribution(target_distribution)
+
     with st.container(border=True):
         st.markdown("#### Model Configuration")
         config_values = render_model_config(model_name, problem_type, dataset, target_col)
@@ -905,7 +1001,7 @@ def render_model_page(
             status = st.status(f"Generating {meta['label']} model...", expanded=True)
             with status:
                 status.write("Processing dataset...")
-                pipeline, feature_names, class_names, target_encoder = build_training_pipeline(
+                pipeline, feature_names, class_names, target_encoder, resample_message = build_training_pipeline(
                     X_train,
                     y_train,
                     selected_features,
@@ -913,25 +1009,58 @@ def render_model_page(
                     problem_type,
                     model_name,
                     tree_params,
+                    resampling_strategy=config_values.get("resampling_strategy", "none"),
+                    random_state=int(random_state),
                 )
                 status.write("Training model...")
+                if resample_message:
+                    status.write(resample_message)
 
                 train_predictions = pipeline.predict(X_train)
                 test_predictions = pipeline.predict(X_test)
+                train_probabilities = None
+                test_probabilities = None
+                if problem_type == "classification" and hasattr(pipeline.named_steps["model"], "predict_proba"):
+                    train_probabilities = pipeline.predict_proba(X_train)
+                    test_probabilities = pipeline.predict_proba(X_test)
                 if target_encoder is not None:
                     y_train_eval = target_encoder.transform(y_train.astype(str))
                     y_test_eval = target_encoder.transform(y_test.astype(str))
                 else:
                     y_train_eval = y_train
                     y_test_eval = y_test
-                train_metrics = evaluate_predictions(y_train_eval, train_predictions, problem_type)
-                test_metrics = evaluate_predictions(y_test_eval, test_predictions, problem_type)
+                train_metrics = evaluate_predictions(
+                    y_train_eval,
+                    train_predictions,
+                    problem_type,
+                    y_proba=train_probabilities,
+                    class_labels=list(class_names) if class_names is not None else None,
+                )
+                test_metrics = evaluate_predictions(
+                    y_test_eval,
+                    test_predictions,
+                    problem_type,
+                    y_proba=test_probabilities,
+                    class_labels=list(class_names) if class_names is not None else None,
+                )
                 status.write("Building visualization...")
                 status.update(label=f"{meta['label']} trained successfully.", state="complete")
 
             st.session_state.metrics = {"train": train_metrics, "test": test_metrics}
             st.session_state.train_metrics = train_metrics
             st.session_state.test_metrics = test_metrics
+            if problem_type == "classification":
+                st.session_state.classification_eval = {
+                    "y_train_eval": y_train_eval,
+                    "y_test_eval": y_test_eval,
+                    "train_probabilities": train_probabilities,
+                    "test_probabilities": test_probabilities,
+                    "class_labels": list(class_names) if class_names is not None else None,
+                    "y_test_raw": y_test,
+                    "y_train_raw": y_train,
+                }
+            else:
+                st.session_state.classification_eval = None
             st.session_state.artifacts = ModelArtifacts(
                 pipeline=pipeline,
                 preprocessor=pipeline.named_steps["preprocessor"],
@@ -959,6 +1088,8 @@ def render_model_page(
                     "model": model_name,
                     "params": tree_params,
                     "train_size": train_size,
+                    "resampling": config_values.get("resampling_strategy", "none"),
+                    "class_weight": config_values.get("use_class_weight", False),
                 }
             )
         except Exception as exc:
@@ -975,6 +1106,34 @@ def render_model_page(
         return
 
     train_meta = st.session_state.last_train_meta or {}
+    display_metrics = st.session_state.test_metrics
+    evaluation_state = st.session_state.get("classification_eval")
+    if artifacts.problem_type == "classification" and evaluation_state and evaluation_state.get("test_probabilities") is not None:
+        class_labels = evaluation_state.get("class_labels") or artifacts.classes_
+        if class_labels and len(class_labels) == 2:
+            threshold = st.slider(
+                "Decision threshold",
+                min_value=0.05,
+                max_value=0.95,
+                value=float(st.session_state.get("decision_threshold", 0.5)),
+                step=0.01,
+                key=f"decision_threshold_{model_name}",
+            )
+            st.session_state.decision_threshold = float(threshold)
+            st.caption(f"Positive-class predictions are now made when probability >= {threshold:.2f}.")
+            threshold_predictions = predict_classes_from_proba(evaluation_state["test_probabilities"], threshold=threshold)
+            display_metrics = evaluate_predictions(
+                evaluation_state["y_test_eval"],
+                threshold_predictions,
+                "classification",
+                y_proba=evaluation_state["test_probabilities"],
+                class_labels=class_labels,
+                threshold=float(threshold),
+            )
+            st.session_state.test_metrics = display_metrics
+        else:
+            display_metrics = st.session_state.test_metrics
+
     render_model_info_cards(
         artifacts,
         model_name,
@@ -982,16 +1141,18 @@ def render_model_page(
         train_meta.get("n_samples", len(dataset)),
     )
     render_model_downloads(artifacts, model_name, st.session_state.dataset_name or "dataset", train_meta)
-    render_evaluation(st.session_state.test_metrics, artifacts.problem_type)
+    render_evaluation(display_metrics, artifacts.problem_type)
     render_result_downloads(
         artifacts,
         model_name,
         st.session_state.dataset_name or "dataset",
         train_meta,
-        st.session_state.test_metrics,
+        display_metrics,
     )
     if artifacts.problem_type == "classification":
-        render_confusion_matrix(st.session_state.test_metrics)
+        render_confusion_matrix(display_metrics)
+        if evaluation_state and evaluation_state.get("test_probabilities") is not None:
+            render_precision_recall_curve(evaluation_state["y_test_eval"], evaluation_state["test_probabilities"])
 
     render_feature_importance(artifacts.pipeline.named_steps["model"], artifacts.feature_names)
     render_tree_visualization_section(artifacts, model_name)

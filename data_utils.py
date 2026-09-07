@@ -35,6 +35,43 @@ def build_signature(payload: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def summarize_class_distribution(target: pd.Series) -> dict[str, Any]:
+    """Summarize class balance so users can spot imbalanced targets early."""
+    cleaned = target.dropna()
+    counts = cleaned.astype(str).value_counts()
+    total = int(counts.sum())
+
+    distribution: list[dict[str, Any]] = []
+    for label, count in counts.items():
+        percentage = (float(count) / total * 100.0) if total else 0.0
+        distribution.append(
+            {
+                "Class": label,
+                "Count": int(count),
+                "Percentage": round(percentage, 2),
+            }
+        )
+
+    majority_class = distribution[0]["Class"] if distribution else None
+    minority_class = distribution[-1]["Class"] if distribution else None
+    majority_share = distribution[0]["Percentage"] if distribution else 0.0
+    minority_share = distribution[-1]["Percentage"] if distribution else 0.0
+    imbalance_ratio = (
+        round((counts.max() / counts.min()), 2) if len(counts) > 1 and counts.min() > 0 else None
+    )
+
+    return {
+        "total": total,
+        "distribution": distribution,
+        "majority_class": majority_class,
+        "minority_class": minority_class,
+        "majority_share": majority_share,
+        "minority_share": minority_share,
+        "imbalance_ratio": imbalance_ratio,
+        "is_imbalanced": bool(total and minority_share < 20.0),
+    }
+
+
 def validate_file_size(file_size: int | None) -> None:
     """Raise a friendly error when uploads exceed the configured size limit."""
     if file_size is None:

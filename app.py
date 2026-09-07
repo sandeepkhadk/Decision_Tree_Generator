@@ -9,7 +9,7 @@ from sklearn.pipeline import Pipeline
 
 from config import APP_NAME
 import model_utils as model_utils_module
-from model_utils import ModelArtifacts, create_model, encode_classification_target
+from model_utils import ModelArtifacts, create_model, encode_classification_target, resample_training_data
 from preprocessing import create_preprocessor, detect_column_types, get_feature_names
 from ui_utils import (
     build_tree_params,
@@ -145,7 +145,9 @@ def build_training_pipeline(
     problem_type: str,
     model_name: str,
     tree_params: dict[str, Any],
-) -> tuple[Pipeline, list[str], list[str] | None, Any | None]:
+    resampling_strategy: str = "none",
+    random_state: int = 0,
+) -> tuple[Pipeline, list[str], list[str] | None, Any | None, str | None]:
     numeric_cols, categorical_cols = detect_column_types(X_train)
     preprocessor = create_preprocessor(numeric_cols, categorical_cols, X_train)
     estimator = create_model(model_name, problem_type, tree_params)
@@ -153,14 +155,27 @@ def build_training_pipeline(
     y_fit = y_train
     if problem_type == "classification":
         y_fit, target_encoder = encode_classification_target(y_train)
+
+    preprocessor.fit(X_train)
+    fitted_preprocessor = preprocessor
+    feature_names = get_feature_names(fitted_preprocessor)
+    X_encoded = pd.DataFrame(fitted_preprocessor.transform(X_train), columns=feature_names, index=X_train.index)
+
+    resample_message = None
+    if problem_type == "classification":
+        if resampling_strategy != "none":
+            X_encoded, y_fit, resample_message = resample_training_data(
+                X_encoded,
+                y_fit,
+                resampling_strategy,
+                int(random_state),
+            )
+    estimator.fit(X_encoded, y_fit)
+
     pipeline = Pipeline([
-        ("preprocessor", preprocessor),
+        ("preprocessor", fitted_preprocessor),
         ("model", estimator),
     ])
-    pipeline.fit(X_train, y_fit)
-
-    fitted_preprocessor = pipeline.named_steps["preprocessor"]
-    feature_names = get_feature_names(fitted_preprocessor)
     class_names = [str(value) for value in target_encoder.classes_] if target_encoder is not None else None
 
     artifacts = ModelArtifacts(
@@ -176,7 +191,7 @@ def build_training_pipeline(
         target_encoder=target_encoder,
     )
     st.session_state.artifacts = artifacts
-    return pipeline, feature_names, class_names, target_encoder
+    return pipeline, feature_names, class_names, target_encoder, resample_message
 
 
 def main() -> None:

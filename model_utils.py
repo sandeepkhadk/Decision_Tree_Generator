@@ -6,6 +6,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
+from sklearn.metrics import average_precision_score, roc_auc_score
+from sklearn.preprocessing import label_binarize
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import (
     accuracy_score,
@@ -96,6 +98,19 @@ MODEL_CATALOG: list[dict[str, str]] = [
 
 MODEL_LOOKUP = {entry["name"]: entry for entry in MODEL_CATALOG}
 
+CLASS_WEIGHT_SUPPORTED_MODELS = {"decision_tree", "random_forest", "extra_trees"}
+
+try:
+    from imblearn.over_sampling import SMOTE  # pyright: ignore[reportMissingImports]
+    from imblearn.over_sampling import RandomOverSampler  # pyright: ignore[reportMissingImports]
+    from imblearn.under_sampling import RandomUnderSampler  # pyright: ignore[reportMissingImports]
+except Exception:  # pragma: no cover - optional dependency
+    SMOTE = None
+    RandomOverSampler = None
+    RandomUnderSampler = None
+
+IMBLEARN_AVAILABLE = SMOTE is not None
+
 
 def get_model_meta(model_name: str) -> dict[str, str]:
     """Look up display metadata for a model, falling back to a generic entry."""
@@ -118,6 +133,10 @@ def get_estimator_count(model) -> int | None:
         except TypeError:
             return None
     return None
+
+
+def supports_class_weight(model_name: str) -> bool:
+    return model_name in CLASS_WEIGHT_SUPPORTED_MODELS
 
 
 @dataclass(slots=True)
@@ -153,6 +172,95 @@ def decode_predictions(predictions, target_encoder: LabelEncoder | None):
     array = np.asarray(predictions)
     decoded = target_encoder.inverse_transform(array.astype(int))
     return decoded
+
+
+def predict_classes_from_proba(y_proba, threshold: float = 0.5):
+    """Convert class probabilities into predicted labels using a threshold for binary tasks."""
+    probabilities = np.asarray(y_proba)
+    if probabilities.ndim == 1:
+        return (probabilities >= threshold).astype(int)
+    if probabilities.shape[1] == 2:
+        return (probabilities[:, 1] >= threshold).astype(int)
+    return probabilities.argmax(axis=1)
+
+
+def resample_training_data(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    strategy: str,
+    random_state: int,
+) -> tuple[pd.DataFrame, pd.Series, str | None]:
+    """Apply simple random over/under sampling to the training split."""
+    if strategy == "none":
+        return X_train, y_train, None
+
+    balanced_strategy = strategy.lower().replace(" ", "_")
+    if balanced_strategy not in {"random_oversample", "random_undersample", "smote"}:
+        raise ValueError("Unsupported resampling strategy.")
+
+    if balanced_strategy == "smote":
+        if SMOTE is None:
+            raise ImportError("SMOTE requires imbalanced-learn. Install imbalanced-learn to use this option.")
+        class_counts = y_train.value_counts()
+        if len(class_counts) < 2:
+            return X_train, y_train, None
+        minority_count = int(class_counts.min())
+        if minority_count < 2:
+            raise ValueError("SMOTE requires at least 2 samples in the minority class.")
+        k_neighbors = min(5, minority_count - 1)
+        sampler = SMOTE(random_state=random_state, k_neighbors=k_neighbors)
+        X_resampled, y_resampled = sampler.fit_resample(X_train, y_train)
+        return (
+            pd.DataFrame(X_resampled, columns=X_train.columns),
+            pd.Series(y_resampled, name=y_train.name),
+            f"SMOTE generated synthetic samples with k_neighbors={k_neighbors}.",
+        )
+
+    frame = X_train.copy()
+    frame["__target__"] = y_train.values
+    counts = frame["__target__"].value_counts()
+    if len(counts) < 2:
+        return X_train, y_train, None
+
+    if balanced_strategy == "random_oversample":
+        if RandomOverSampler is not None:
+            sampler = RandomOverSampler(random_state=random_state)
+            X_resampled, y_resampled = sampler.fit_resample(X_train, y_train)
+            return (
+                pd.DataFrame(X_resampled, columns=X_train.columns),
+                pd.Series(y_resampled, name=y_train.name),
+                "Random oversampling balanced the training classes.",
+            )
+        target_size = int(counts.max())
+        sampled_frames = []
+        for label, group in frame.groupby("__target__", sort=False):
+            sampled_frames.append(group.sample(n=target_size, replace=True, random_state=random_state))
+        balanced = pd.concat(sampled_frames, axis=0).sample(frac=1.0, random_state=random_state)
+        return (
+            balanced.drop(columns=["__target__"]).reset_index(drop=True),
+            balanced["__target__"].reset_index(drop=True),
+            f"Random oversampling expanded each class to {target_size} rows.",
+        )
+
+    if RandomUnderSampler is not None:
+        sampler = RandomUnderSampler(random_state=random_state)
+        X_resampled, y_resampled = sampler.fit_resample(X_train, y_train)
+        return (
+            pd.DataFrame(X_resampled, columns=X_train.columns),
+            pd.Series(y_resampled, name=y_train.name),
+            "Random undersampling balanced the training classes.",
+        )
+
+    target_size = int(counts.min())
+    sampled_frames = []
+    for label, group in frame.groupby("__target__", sort=False):
+        sampled_frames.append(group.sample(n=target_size, replace=False, random_state=random_state))
+    balanced = pd.concat(sampled_frames, axis=0).sample(frac=1.0, random_state=random_state)
+    return (
+        balanced.drop(columns=["__target__"]).reset_index(drop=True),
+        balanced["__target__"].reset_index(drop=True),
+        f"Random undersampling reduced each class to {target_size} rows.",
+    )
 
 
 def supports_optional_booster(model_name: str) -> bool:
@@ -231,24 +339,80 @@ def create_model(model_name: str, problem_type: str, params: dict[str, Any]):
     raise ValueError(f"Unsupported model type: {model_name}")
 
 
-def evaluate_predictions(y_true, y_pred, problem_type: str) -> dict[str, Any]:
+def evaluate_predictions(
+    y_true,
+    y_pred,
+    problem_type: str,
+    y_proba=None,
+    class_labels: list[str] | None = None,
+    threshold: float = 0.5,
+) -> dict[str, Any]:
     """Compute a metrics dictionary for either classification or regression."""
     if problem_type == "classification":
-        labels = pd.Index(y_true.astype(str)).unique()
-        return {
+        y_true_array = np.asarray(y_true)
+        y_pred_array = np.asarray(y_pred)
+        if class_labels is not None:
+            report_labels = list(range(len(class_labels)))
+            target_names = [str(label) for label in class_labels]
+        else:
+            report_labels = list(pd.Index(pd.Series(y_true_array).astype(str)).unique())
+            target_names = [str(label) for label in report_labels]
+
+        report = classification_report(
+            y_true_array,
+            y_pred_array,
+            labels=report_labels,
+            target_names=target_names,
+            output_dict=True,
+            zero_division=0,
+        )
+        warnings: list[str] = []
+        zero_recall_classes: list[str] = []
+        if len(np.unique(y_pred_array)) == 1:
+            warnings.append("Model predicts only one class - check for class imbalance.")
+        for label_name in target_names:
+            class_row = report.get(label_name, {})
+            if float(class_row.get("recall", 0.0)) == 0.0:
+                warnings.append(f"Class {label_name} has 0 recall.")
+                zero_recall_classes.append(str(label_name))
+
+        roc_auc = None
+        pr_auc = None
+        if y_proba is not None:
+            probabilities = np.asarray(y_proba)
+            if len(report_labels) == 2 and probabilities.ndim == 2 and probabilities.shape[1] >= 2:
+                positive_scores = probabilities[:, 1]
+                roc_auc = roc_auc_score(y_true_array, positive_scores)
+                pr_auc = average_precision_score(y_true_array, positive_scores)
+            elif probabilities.ndim == 2 and probabilities.shape[1] == len(report_labels):
+                y_binarized = label_binarize(y_true_array, classes=report_labels)
+                roc_auc = roc_auc_score(y_binarized, probabilities, average="macro", multi_class="ovr")
+                pr_auc = average_precision_score(y_binarized, probabilities, average="macro")
+
+        result = {
             "Accuracy": accuracy_score(y_true, y_pred),
-            "Precision": precision_score(y_true, y_pred, average="weighted", zero_division=0),
-            "Recall": recall_score(y_true, y_pred, average="weighted", zero_division=0),
-            "F1 Score": f1_score(y_true, y_pred, average="weighted", zero_division=0),
-            "Confusion Matrix": confusion_matrix(y_true, y_pred),
-            "Classification Report": classification_report(
-                y_true,
-                y_pred,
-                output_dict=True,
-                zero_division=0,
-            ),
-            "Labels": [str(label) for label in labels],
+            "Precision": precision_score(y_true_array, y_pred_array, average="weighted", zero_division=0),
+            "Recall": recall_score(y_true_array, y_pred_array, average="weighted", zero_division=0),
+            "F1 Score": f1_score(y_true_array, y_pred_array, average="weighted", zero_division=0),
+            "Macro Precision": precision_score(y_true_array, y_pred_array, average="macro", zero_division=0),
+            "Macro Recall": recall_score(y_true_array, y_pred_array, average="macro", zero_division=0),
+            "Macro F1": f1_score(y_true_array, y_pred_array, average="macro", zero_division=0),
+            "Confusion Matrix": confusion_matrix(y_true_array, y_pred_array, labels=report_labels),
+            "Classification Report": report,
+            "Labels": target_names,
+            "Per Class Metrics": {
+                label: report[label]
+                for label in target_names
+                if label in report
+            },
+            "ROC AUC": roc_auc,
+            "PR AUC": pr_auc,
+            "Warnings": warnings,
+            "Degenerate Prediction": len(np.unique(y_pred_array)) == 1,
+            "Zero Recall Classes": zero_recall_classes,
+            "Decision Threshold": threshold,
         }
+        return result
 
     mse = mean_squared_error(y_true, y_pred)
     return {
