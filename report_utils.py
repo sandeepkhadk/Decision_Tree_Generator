@@ -132,6 +132,52 @@ def build_tree_visualization_figure(artifacts: ModelArtifacts):
         return None
 
 
+def build_result_discussion(metrics: dict[str, Any], artifacts: ModelArtifacts) -> tuple[str, str]:
+    """Create a short discussion and recommendation summary for the report."""
+    if artifacts.problem_type != "classification":
+        return (
+            "The regression model produced the evaluation metrics shown above. Review the error values alongside the tree visualizations to judge whether the model is capturing the signal well.",
+            "If the errors are still high, consider feature engineering, a different tree depth, or trying an alternative tree-based model.",
+        )
+
+    accuracy = float(metrics.get("Accuracy", 0.0))
+    weighted_f1 = float(metrics.get("F1 Score", 0.0))
+    macro_f1 = float(metrics.get("Macro F1", weighted_f1))
+    roc_auc = metrics.get("ROC AUC")
+    pr_auc = metrics.get("PR AUC")
+    warnings = metrics.get("Warnings", [])
+    minority_share = None
+
+    if metrics.get("Labels") and metrics.get("Per Class Metrics"):
+        per_class = metrics["Per Class Metrics"]
+        support_values = [int(values.get("support", 0)) for values in per_class.values() if isinstance(values, dict)]
+        total_support = sum(support_values)
+        if total_support:
+            minority_share = min(support_values) / total_support * 100.0
+
+    discussion_parts = [
+        f"The classifier achieved {accuracy:.1%} accuracy with a weighted F1-score of {weighted_f1:.3f} and a macro F1-score of {macro_f1:.3f}.",
+    ]
+    if roc_auc is not None:
+        discussion_parts.append(f"ROC-AUC was {float(roc_auc):.3f}, which helps show ranking quality beyond accuracy.")
+    if pr_auc is not None:
+        discussion_parts.append(f"PR-AUC was {float(pr_auc):.3f}, which is especially important when the positive class is rare.")
+    if minority_share is not None:
+        discussion_parts.append(f"The smallest class represents about {minority_share:.1f}% of the labeled data.")
+    if warnings:
+        discussion_parts.append("The evaluation also flagged class imbalance or zero-recall behavior, so accuracy alone is not a reliable success signal here.")
+
+    recommendation_parts = [
+        "Keep balanced class weights enabled or try resampling if the model still predicts the majority class too often.",
+        "Use the threshold slider to trade precision for recall when the positive class is the one you care about most.",
+        "If recall remains near zero for any class, inspect the class distribution, feature quality, and train/test split before trusting the model.",
+    ]
+    if weighted_f1 < 0.6 or warnings:
+        recommendation_parts.insert(0, "The model is not yet reliable enough for deployment on its current setting.")
+
+    return " ".join(discussion_parts), " ".join(recommendation_parts)
+
+
 def build_result_pdf(
     dataset_name: str,
     model_name: str,
@@ -331,34 +377,14 @@ def build_result_pdf(
         )
         elements.append(auc_table)
 
-    if artifacts.problem_type == "classification" and "Confusion Matrix" in metrics:
+    if artifacts.problem_type == "classification":
+        discussion_text, recommendation_text = build_result_discussion(metrics, artifacts)
         elements.append(Spacer(1, 0.15 * inch))
-        elements.append(Paragraph("Confusion Matrix", heading_style))
-        labels = [str(label) for label in metrics.get("Labels", [])]
-        matrix = metrics["Confusion Matrix"]
-        confusion_rows = [["", *labels]]
-        for index, row in enumerate(matrix):
-            confusion_rows.append([labels[index] if index < len(labels) else str(index), *[int(value) for value in row]])
-
-        confusion_table = Table(confusion_rows)
-        confusion_table.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dbeafe")),
-                    ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#dbeafe")),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-                    ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#cbd5e1")),
-                    ("FONTSIZE", (0, 0), (-1, -1), 8),
-                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                    ("TOPPADDING", (0, 0), (-1, -1), 4),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                ]
-            )
-        )
-        elements.append(confusion_table)
+        elements.append(Paragraph("Discussion", heading_style))
+        elements.append(Paragraph(discussion_text, body_style))
+        elements.append(Spacer(1, 0.08 * inch))
+        elements.append(Paragraph("Recommendation", heading_style))
+        elements.append(Paragraph(recommendation_text, body_style))
 
     if artifacts.problem_type == "classification" and metrics.get("Degenerate Prediction"):
         elements.append(Spacer(1, 0.12 * inch))
