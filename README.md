@@ -1,96 +1,74 @@
-#  🌳 ML Trees Generator
-
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://mltreestudio.streamlit.app/)
-[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
-
-An interactive dashboard-style web application for building, configuring, and visualizing tree-based machine learning models — decision trees, random forests, extra trees, gradient boosting, hist gradient boosting, AdaBoost, XGBoost, LightGBM, and CatBoost — from uploaded datasets.
-
-Live demo: https://mltreestudio.streamlit.app/
-
-
-## Features
-
--  🏠 Dashboard home page with quick actions and model cards
--  🧭 Sidebar navigation across all supported models and the dataset page
--  📊 Upload CSV/Excel datasets with a drag-and-drop interface
--  🔍 Interactive data exploration
--  🌲 Multiple tree-based model support, each with its own configuration and description
--  📈 Feature importance visualization
--  🌳 Interactive tree viewer with zoom, pan, fit-to-view, and fullscreen controls
--  🎯 Automatic problem type detection (classification/regression)
--  💾 Export decision trees and feature importance
-
-## Getting Started
-
-### Prerequisites
-
-- Python 3.8+
-- pip package manager
-
-### Installation
-
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/sandeepkhadk/Decision_Tree_Generator.git
-   cd Decision_Tree_Generator
-   
-2. **Set up a virtual environment**:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-3. **Install dependencies:**
-    ```bash
-   pip install -r requirements.txt
-
 # ML Trees Generator
 
 [![Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://streamlit.io/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-An interactive Streamlit application for uploading a dataset, profiling the data, training a tree-based model, visualizing the tree when supported, evaluating performance, and generating predictions in the browser.
+An interactive Streamlit app for uploading a dataset, profiling the data, training a tree-based model, visualizing the result, and exporting downloadable reports.
+
+Live demo: https://mltreestudio.streamlit.app/
 
 ## Features
 
 - CSV and Excel upload with validation and friendly error handling
 - Automatic dataset summary with rows, columns, missing values, duplicates, and preview
-- Target selection and feature selection with automatic numeric/categorical detection
-- Automatic preprocessing for missing values and categorical features before model training
-- Reproducible preprocessing with imputation and one-hot encoding
-- Downloadable dataset profiling reports and trained model bundles
-- Decision Tree, Random Forest, Extra Trees, Gradient Boosting, HistGradientBoosting, and AdaBoost configuration
+- Target selection and feature selection with automatic numeric and categorical detection
+- Automatic preprocessing for missing values and categorical features before training
+- Downloadable dataset profile JSON, trained model bundle, and PDF result report
+- Responsive layout tuned for smaller screens
+- Decision Tree, Random Forest, Extra Trees, Gradient Boosting, HistGradientBoosting, AdaBoost, XGBoost, LightGBM, and CatBoost configuration
 - Classification and regression metrics
 - Tree visualization with optional depth limiting and image download when supported
 - Feature importance visualization for tree-based models
 - Dynamic prediction form based on the selected features
 
-## Screenshots
+## Data Cleaning and Preprocessing
 
-Add screenshots of the dashboard here after deployment.
+The app handles some common messy-data cases automatically during training:
 
-## Technology Stack
+- Missing numeric values are imputed with the median
+- Missing categorical values are imputed with the most frequent value
+- Categorical features are one-hot encoded for model training
+- Unsupported column types are ignored with a warning
 
-- Python
-- Streamlit
-- pandas
-- NumPy
-- scikit-learn
-- Matplotlib
-- Seaborn
-- OpenPyXL
-- XGBoost
-- LightGBM
-- CatBoost
+It does not perform full data cleaning such as fixing inconsistent labels, parsing malformed dates, or removing duplicate rows automatically, so very messy datasets may still need manual cleanup first.
+
+## Project Structure
+
+```text
+Decision_Tree_Generator/
+├── app.py
+├── config.py
+├── data_utils.py
+├── model.py
+├── model_utils.py
+├── preprocessing.py
+├── report_utils.py
+├── tree_utils.py
+├── ui_utils.py
+├── visualization.py
+├── requirements.txt
+├── .devcontainer/
+│   └── devcontainer.json
+└── .streamlit/
+   └── config.toml
+```
 
 ## Architecture Summary
 
-- `app.py` is the Streamlit entry point and controls the full dashboard flow.
+- `app.py` is the Streamlit entry point and controls the dashboard flow.
+- `ui_utils.py` handles page rendering, session state, and interactive controls.
 - `data_utils.py` handles upload validation, dataset loading, and summary generation.
 - `preprocessing.py` detects column types and builds the preprocessing pipeline.
-- `model_utils.py` creates the model and computes metrics.
-- `tree_utils.py` renders the trained tree-based model when visualization is supported.
+- `model_utils.py` creates models and computes evaluation metrics.
+- `report_utils.py` builds downloadable reports and reusable result visualizations.
+- `tree_utils.py` renders trained tree-based models when visualization is supported.
 - `config.py` stores environment-driven defaults and UI settings.
+
+## Requirements
+
+- Python 3.11 or newer
+- pip package manager
 
 ## Installation
 
@@ -109,7 +87,7 @@ venv\Scripts\activate
 ### Install dependencies
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 ## Local Development
@@ -141,17 +119,6 @@ Optional environment variables:
 6. Review the metrics and visualization.
 7. Use the prediction form to generate outputs for new records.
 
-## Data Cleaning and Preprocessing
-
-The app handles some common messy-data cases automatically during training:
-
-- Missing numeric values are imputed with the median.
-- Missing categorical values are imputed with the most frequent value.
-- Categorical features are one-hot encoded for model training.
-- Unsupported column types are ignored with a warning.
-
-It does not perform full data cleaning such as fixing inconsistent labels, parsing malformed dates, or removing duplicate rows automatically, so very messy datasets may still need manual cleanup first.
-
 ## Model Details
 
 The app trains a selected tree-based model, including `DecisionTreeClassifier` / `DecisionTreeRegressor`, `RandomForestClassifier` / `RandomForestRegressor`, `ExtraTreesClassifier` / `ExtraTreesRegressor`, `GradientBoostingClassifier` / `GradientBoostingRegressor`, `HistGradientBoostingClassifier` / `HistGradientBoostingRegressor`, `AdaBoostClassifier` / `AdaBoostRegressor`, `XGBClassifier` / `XGBRegressor`, `LGBMClassifier` / `LGBMRegressor`, and `CatBoostClassifier` / `CatBoostRegressor` depending on the chosen model and target column. Numeric features are imputed with the median, categorical features are imputed with the most frequent value and one-hot encoded, and the train/test split is reproducible through a configurable random state.
@@ -173,23 +140,6 @@ Regression:
 - MSE
 - RMSE
 - R²
-
-## Project Structure
-
-```text
-Decision_Tree_Generator/
-├── app.py
-├── config.py
-├── data_utils.py
-├── model_utils.py
-├── preprocessing.py
-├── tree_utils.py
-├── visualization.py
-├── requirements.txt
-├── .gitignore
-└── .streamlit/
-    └── config.toml
-```
 
 ## Deployment Instructions
 
