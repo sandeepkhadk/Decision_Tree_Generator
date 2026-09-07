@@ -860,10 +860,29 @@ def render_model_page(
             target = dataset[target_col].copy()
             if features.empty:
                 raise ValueError("No usable feature columns were selected.")
-            if target.isna().all():
+            training_frame = features.join(target.rename(target_col)).dropna(subset=[target_col])
+            dropped_target_rows = len(dataset) - len(training_frame)
+            if dropped_target_rows > 0:
+                st.warning(
+                    f"Dropped {dropped_target_rows} row(s) with missing target values before training."
+                )
+
+            if training_frame.empty:
                 raise ValueError("The target column contains only missing values.")
 
-            stratify = target if problem_type == "classification" and target.nunique(dropna=True) > 1 else None
+            features = training_frame[selected_features]
+            target = training_frame[target_col]
+
+            stratify = None
+            if problem_type == "classification" and target.nunique(dropna=True) > 1:
+                class_counts = target.value_counts(dropna=True)
+                if class_counts.min() >= 2:
+                    stratify = target
+                else:
+                    st.warning(
+                        "Some classes have only one sample, so the train/test split will be unstratified."
+                    )
+
             effective_test_size = 1 - train_size
             if stratify is not None:
                 minimum_test_size = target.nunique(dropna=True) / len(target)
