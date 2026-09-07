@@ -56,6 +56,7 @@ An interactive Streamlit application for uploading a dataset, profiling the data
 - CSV and Excel upload with validation and friendly error handling
 - Automatic dataset summary with rows, columns, missing values, duplicates, and preview
 - Target selection and feature selection with automatic numeric/categorical detection
+- Automatic preprocessing for missing values and categorical features before model training
 - Reproducible preprocessing with imputation and one-hot encoding
 - Decision Tree, Random Forest, Extra Trees, Gradient Boosting, HistGradientBoosting, and AdaBoost configuration
 - Classification and regression metrics
@@ -138,6 +139,17 @@ Optional environment variables:
 5. Train the model.
 6. Review the metrics and visualization.
 7. Use the prediction form to generate outputs for new records.
+
+## Data Cleaning and Preprocessing
+
+The app handles some common messy-data cases automatically during training:
+
+- Missing numeric values are imputed with the median.
+- Missing categorical values are imputed with the most frequent value.
+- Categorical features are one-hot encoded for model training.
+- Unsupported column types are ignored with a warning.
+
+It does not perform full data cleaning such as fixing inconsistent labels, parsing malformed dates, or removing duplicate rows automatically, so very messy datasets may still need manual cleanup first.
 
 ## Model Details
 
